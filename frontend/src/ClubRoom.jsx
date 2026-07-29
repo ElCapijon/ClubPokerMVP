@@ -364,6 +364,20 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
     });
   }, [clubId, addNotification]);
 
+  const handleAddBots = useCallback(() => {
+    getSocket().emit('add_bots', { clubId }, (err, data) => {
+      if (err) addNotification(err.error || 'Failed to add bots', 'error');
+      else addNotification(`🤖 Added ${data.botsAdded} bots to the table!`, 'success');
+    });
+  }, [clubId, addNotification]);
+
+  const handleRemoveBots = useCallback(() => {
+    getSocket().emit('remove_bots', { clubId }, (err, data) => {
+      if (err) addNotification(err.error || 'Failed to remove bots', 'error');
+      else addNotification(`Removed ${data.botsRemoved} bots`, 'info');
+    });
+  }, [clubId, addNotification]);
+
   const isMyTurn = currentPlayerSeatIndex === mySeatIndex && gameState !== 'WAITING' && gameState !== 'SHOWDOWN' && gameState !== 'HAND_COMPLETE';
   const myPlayerData = players[mySeatIndex];
   const isMeFolded = myPlayerData?.isFolded;
@@ -674,6 +688,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                     {player.userName}
                     {isMe && <span className="text-poker-gold"> (You)</span>}
                     {player.isHost && !isMe && <span className="text-yellow-400">★</span>}
+                    {player.isBot && <span className="text-purple-400 text-[8px]">BOT</span>}
                   </p>
 
                   {/* Stack */}
@@ -825,13 +840,31 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                   )}
 
                   {isHost && (
-                    <button
-                      onClick={handleStartGame}
-                      disabled={connectedPlayers.length < 2}
-                      className="btn-primary px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs"
-                    >
-                      Start Game
-                    </button>
+                    <>
+                      <button
+                        onClick={handleStartGame}
+                        disabled={connectedPlayers.length < 2}
+                        className="btn-primary px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs"
+                      >
+                        Start Game
+                      </button>
+                      <button
+                        onClick={handleAddBots}
+                        className="px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-all duration-200 active:scale-95
+                                 bg-gradient-to-r from-purple-600 to-purple-500 text-white shadow-lg shadow-purple-600/20 hover:from-purple-500 hover:to-purple-400"
+                      >
+                        🤖 Fill Bots
+                      </button>
+                      {players.some(p => p?.isBot) && (
+                        <button
+                          onClick={handleRemoveBots}
+                          className="px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl text-[10px] sm:text-xs font-semibold transition-all duration-200 active:scale-95
+                                   bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white"
+                        >
+                          Remove Bots
+                        </button>
+                      )}
+                    </>
                   )}
                 </>
               )}

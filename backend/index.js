@@ -6,6 +6,7 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const { generateInviteCode } = require('./InviteCode');
 const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction } = require('./GameHand');
+const { getNextBotName, resetBotNames, decideAction } = require('./botPlayer');
 const pool = require('./db');
 
 // ============================================================
@@ -163,6 +164,7 @@ function broadcastClubState(clubId) {
       isConnected: seat.isConnected,
       isHost: seat.userId === club.hostId,
       isSittingOut: seat.isSittingOut || false,
+      isBot: seat.isBot || false,
     };
   });
 
@@ -214,6 +216,76 @@ function clearActionTimer(clubId) {
   }
 }
 
+/** Process a bot player's turn immediately */
+function processBotAction(clubId) {
+  const club = clubs.get(clubId);
+  if (!club || !club.currentHand) return;
+
+  const hand = club.currentHand;
+  if (hand.gameStatus === GAME_STATES.SHOWDOWN || hand.gameStatus === GAME_STATES.HAND_COMPLETE) return;
+
+  const currentPlayer = hand.players[hand.currentPlayerIndex];
+  if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) return;
+
+  // Check if current player is a bot
+  const seat = club.seats[currentPlayer.seatIndex];
+  if (!seat || !seat.isBot) return;
+
+  // Bot decides its action
+  const decision = decideAction(hand, currentPlayer.seatIndex);
+  if (!decision) return;
+
+  console.log(`[Bot] ${seat.userName} decides to ${decision.action}${decision.amount ? ' $' + decision.amount : ''}`);
+
+  const result = handleAction(hand, currentPlayer.seatIndex, decision.action, decision.amount);
+  if (result.error) return;
+
+  // Record the action
+  recordAction(clubId, currentPlayer.seatIndex, decision.action, decision.amount);
+
+  // Update club state
+  club.gameState = hand.gameStatus;
+  for (const hp of hand.players) {
+    const s = club.seats[hp.seatIndex];
+    if (s) s.stack = hp.stack;
+  }
+
+  broadcastGameState(clubId);
+  clearActionTimer(clubId);
+
+  // If hand is complete, schedule next hand
+  if (isHandComplete(hand)) {
+    lastActions.delete(clubId);
+    io.to(clubRoom(clubId)).emit('hand_complete', {
+      handResult: hand.handResult,
+      communityCards: hand.communityCards,
+      players: hand.players.map(p => ({
+        seatIndex: p.seatIndex,
+        userName: p.userName,
+        holeCards: p.holeCards,
+        stack: p.stack,
+      })),
+    });
+    setTimeout(() => {
+      const c = clubs.get(clubId);
+      if (!c) return;
+      const nextHandCount = (handCounters.get(clubId) || 0) + 1;
+      const nextHand = createHand(c, nextHandCount);
+      if (nextHand) {
+        startHand(nextHand);
+        c.currentHand = nextHand;
+        c.gameState = nextHand.gameStatus;
+        handCounters.set(clubId, nextHandCount);
+        broadcastGameState(clubId);
+        setActionTimer(clubId);
+      }
+    }, 3000);
+  } else {
+    // Schedule next bot action or set timer for human
+    setActionTimer(clubId);
+  }
+}
+
 /** Set a new action timer for the current player in the hand */
 function setActionTimer(clubId) {
   clearActionTimer(clubId);
@@ -226,6 +298,15 @@ function setActionTimer(clubId) {
 
   const currentPlayer = hand.players[hand.currentPlayerIndex];
   if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) return;
+
+  // Check if current player is a bot — process immediately after a short delay
+  const seat = club.seats[currentPlayer.seatIndex];
+  if (seat && seat.isBot) {
+    const botDelay = 800 + Math.random() * 1200; // 0.8-2s delay for visual effect
+    const botTimeout = setTimeout(() => processBotAction(clubId), botDelay);
+    actionTimers.set(clubId, botTimeout);
+    return;
+  }
 
   const timerMs = (hand.actionTimer || 20) * 1000;
 
@@ -746,6 +827,98 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('[Rebuy Error]', err);
       callback && callback({ error: 'Failed to process rebuy' });
+    }
+  });
+
+  // ---------- ADD BOTS ----------
+  socket.on('add_bots', ({ clubId }, callback) => {
+    try {
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo || playerInfo.clubId !== clubId) {
+        return callback && callback({ error: 'Not in this club' });
+      }
+
+      const club = clubs.get(clubId);
+      if (!club) {
+        return callback && callback({ error: 'Club not found' });
+      }
+
+      // Only host can add bots
+      if (playerInfo.userId !== club.hostId) {
+        return callback && callback({ error: 'Only the host can add bots' });
+      }
+
+      // Can only add bots when game is waiting
+      if (club.gameState !== 'WAITING') {
+        return callback && callback({ error: 'Can only add bots before the game starts' });
+      }
+
+      // Fill empty seats with bots
+      let botsAdded = 0;
+      for (let i = 0; i < MAX_SEATS; i++) {
+        if (club.seats[i] === null) {
+          club.seats[i] = {
+            userId: `bot_${uuidv4()}`,
+            userName: getNextBotName(),
+            stack: club.tableSettings.startingStack,
+            isReady: true,
+            isConnected: true,
+            isSittingOut: false,
+            isBot: true,
+          };
+          botsAdded++;
+        }
+      }
+
+      console.log(`[Bots] Added ${botsAdded} bots to club ${clubId}`);
+      broadcastClubState(clubId);
+      callback && callback(null, { botsAdded });
+    } catch (err) {
+      console.error('[Add Bots Error]', err);
+      callback && callback({ error: 'Failed to add bots' });
+    }
+  });
+
+  // ---------- REMOVE BOTS ----------
+  socket.on('remove_bots', ({ clubId }, callback) => {
+    try {
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo || playerInfo.clubId !== clubId) {
+        return callback && callback({ error: 'Not in this club' });
+      }
+
+      const club = clubs.get(clubId);
+      if (!club) {
+        return callback && callback({ error: 'Club not found' });
+      }
+
+      // Only host can remove bots
+      if (playerInfo.userId !== club.hostId) {
+        return callback && callback({ error: 'Only the host can remove bots' });
+      }
+
+      // Can only remove bots when game is waiting
+      if (club.gameState !== 'WAITING') {
+        return callback && callback({ error: 'Can only remove bots before the game starts' });
+      }
+
+      // Remove all bot seats
+      let botsRemoved = 0;
+      for (let i = 0; i < MAX_SEATS; i++) {
+        if (club.seats[i] && club.seats[i].isBot) {
+          club.seats[i] = null;
+          botsRemoved++;
+        }
+      }
+
+      resetBotNames();
+
+      console.log(`[Bots] Removed ${botsRemoved} bots from club ${clubId}`);
+      broadcastClubState(clubId);
+      callback && callback(null, { botsRemoved });
+    } catch (err) {
+      console.error('[Remove Bots Error]', err);
+      callback && callback({ error: 'Failed to remove bots' });
     }
   });
 
