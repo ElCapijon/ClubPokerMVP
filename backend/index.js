@@ -385,6 +385,40 @@ function setActionTimer(clubId) {
   actionTimers.set(clubId, timeout);
 }
 
+/**
+ * Check if all seated players are ready and auto-start if so.
+ * Called after player_ready, add_bots, or when all seats fill.
+ */
+function checkAutoStart(clubId) {
+  const club = clubs.get(clubId);
+  if (!club || club.gameState !== 'WAITING') return;
+
+  // Need at least 2 active players (connected, not sitting out)
+  const seated = club.seats.filter(s => s && s.isConnected && !s.isSittingOut);
+  if (seated.length < 2) return;
+
+  // Check if ALL seated players are ready
+  const allReady = seated.every(s => s.isReady === true);
+  if (!allReady) return;
+
+  console.log(`[Auto-Start] All ${seated.length} players ready in club ${clubId}. Starting game...`);
+
+  // Start the game (same logic as start_game handler)
+  let handCount = handCounters.get(clubId) || 0;
+  const hand = createHand(club, handCount);
+  if (!hand) return;
+
+  startHand(hand);
+  club.currentHand = hand;
+  club.gameState = hand.gameStatus;
+  handCounters.set(clubId, handCount + 1);
+
+  console.log(`[Start Game] Club ${clubId} hand ${handCount} started (auto-start)`);
+
+  broadcastGameState(clubId);
+  setActionTimer(clubId);
+}
+
 /** Record and broadcast the last action */
 function recordAction(clubId, seatIndex, action, amount) {
   const club = clubs.get(clubId);
@@ -731,6 +765,9 @@ io.on('connection', (socket) => {
     console.log(`[Ready] ${seat.userName} is ${seat.isReady ? 'ready' : 'not ready'}`);
 
     broadcastClubState(clubId);
+    
+    // Check if all players are now ready — auto-start!
+    checkAutoStart(clubId);
   });
 
   // ---------- RECONNECT / REJOIN ----------
@@ -872,6 +909,10 @@ io.on('connection', (socket) => {
 
       console.log(`[Bots] Added ${botsAdded} bots to club ${clubId}`);
       broadcastClubState(clubId);
+      
+      // Bots are auto-ready — check if game should start
+      checkAutoStart(clubId);
+      
       callback && callback(null, { botsAdded });
     } catch (err) {
       console.error('[Add Bots Error]', err);
