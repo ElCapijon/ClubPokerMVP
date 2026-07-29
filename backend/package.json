@@ -4,7 +4,6 @@
   "description": "Clubhouse Poker - Backend Server",
   "main": "index.js",
   "scripts": {
-    "postinstall": "cd ../frontend && npm install && npm run build",
     "start": "node index.js",
     "dev": "node --watch index.js",
     "migrate": "node migrate.js",
