@@ -180,16 +180,21 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
       setHandCount(data.handCount || 0);
       setActionTimeRemaining(data.actionTimeRemaining || 0);
       setActionTimerTotal(data.actionTimerTotal || 20);
+      if (data.gameStatus) setGameState(data.gameStatus);
 
       // Update players from game state
       if (data.players) {
         setPlayers(prev => {
           const updated = [...prev];
           for (const p of data.players) {
+            // Preserve hole cards when updating from public state
+            const existing = updated[p.seatIndex];
             updated[p.seatIndex] = {
-              ...updated[p.seatIndex],
+              ...existing,
               ...p,
               isPlaying: true,
+              // Keep hole cards that were received privately
+              holeCards: existing?.holeCards || undefined,
             };
           }
           return updated;
@@ -199,6 +204,16 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
 
     const onYourHoleCards = (data) => {
       setHoleCards(data.holeCards || []);
+      // Also populate the player's entry in the players array for seat display
+      if (data.holeCards) {
+        setPlayers(prev => {
+          const updated = [...prev];
+          if (updated[mySeatIndex]) {
+            updated[mySeatIndex] = { ...updated[mySeatIndex], holeCards: data.holeCards };
+          }
+          return updated;
+        });
+      }
     };
 
     const onFullStateSnapshot = (data) => {
@@ -210,15 +225,19 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
       setDealerSeatIndex(data.dealerSeatIndex || -1);
       setHandCount(data.handCount || 0);
       setHoleCards(data.holeCards || []);
+      if (data.gameStatus) setGameState(data.gameStatus);
       
       if (data.players) {
         setPlayers(prev => {
           const updated = [...prev];
           for (const p of data.players) {
+            const existing = updated[p.seatIndex];
             updated[p.seatIndex] = {
-              ...updated[p.seatIndex],
+              ...existing,
               ...p,
               isPlaying: true,
+              // Preserve hole cards from snapshot
+              holeCards: existing?.holeCards || data.holeCards || undefined,
             };
           }
           return updated;
