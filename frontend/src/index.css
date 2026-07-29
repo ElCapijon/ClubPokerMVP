@@ -1,0 +1,384 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Prevent text selection on game elements */
+  .no-select {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-6 py-3 bg-gradient-to-r from-poker-gold to-yellow-500 text-black font-bold rounded-xl
+           shadow-lg shadow-yellow-600/30 hover:shadow-yellow-500/50
+           transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply px-6 py-3 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-bold rounded-xl
+           shadow-lg hover:shadow-xl hover:from-gray-600 hover:to-gray-500
+           transition-all duration-200 active:scale-95;
+  }
+
+  .btn-danger {
+    @apply px-6 py-3 bg-gradient-to-r from-red-600 to-red-500 text-white font-bold rounded-xl
+           shadow-lg hover:shadow-red-500/30
+           transition-all duration-200 active:scale-95;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white
+           placeholder-gray-500 focus:border-poker-gold focus:ring-2 focus:ring-poker-gold/30
+           outline-none transition-all duration-200;
+  }
+
+  /* ---- Card Styles ---- */
+  .card-back {
+    @apply bg-gradient-to-br from-blue-600 to-blue-800 rounded-lg border-2 border-white/20
+           shadow-lg relative overflow-hidden;
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 8px,
+      rgba(255, 255, 255, 0.06) 8px,
+      rgba(255, 255, 255, 0.06) 16px
+    );
+  }
+
+  .card-back::after {
+    content: '♠';
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    color: rgba(255, 255, 255, 0.08);
+  }
+
+  .card-front {
+    @apply bg-white rounded-lg shadow-lg border border-gray-200;
+    background: linear-gradient(135deg, #ffffff 0%, #f8f8f8 100%);
+  }
+
+  /* ---- Poker Chip ---- */
+  .poker-chip {
+    @apply rounded-full flex items-center justify-center font-bold text-xs
+           shadow-inner shadow-black/30 border-2 border-dashed;
+    background: radial-gradient(circle at 35% 35%, #e8b830, #c99200);
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  /* ---- Seat Styles ---- */
+  .seat-empty {
+    @apply border-2 border-dashed border-gray-600/50 rounded-2xl bg-gray-800/30
+           flex items-center justify-center text-gray-500 transition-all duration-300;
+  }
+
+  .seat-empty:hover {
+    @apply border-gray-500/70 bg-gray-800/50;
+  }
+
+  .seat-occupied {
+    @apply bg-gradient-to-b from-gray-800 to-gray-900 rounded-2xl border border-gray-700/50
+           shadow-lg transition-all duration-300 relative;
+  }
+
+  /* ---- The Felt Table ---- */
+  .felt-table {
+    @apply rounded-[48%] border-8 shadow-2xl shadow-black/50;
+    border-color: #5c3a1e;
+    background: radial-gradient(ellipse at 45% 45%, #1a7a3e 0%, #0f5a2a 40%, #0a3d1c 100%);
+    box-shadow:
+      0 0 60px rgba(0, 0, 0, 0.5),
+      inset 0 0 40px rgba(0, 0, 0, 0.2),
+      0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+
+  /* ---- Action Buttons ---- */
+  .action-btn-fold {
+    @apply bg-gradient-to-r from-red-600 to-red-500 text-white font-bold rounded-xl
+           hover:from-red-500 hover:to-red-400 transition-all duration-200 active:scale-95
+           shadow-lg shadow-red-600/20 disabled:opacity-25 disabled:cursor-not-allowed;
+  }
+
+  .action-btn-check {
+    @apply bg-gradient-to-r from-yellow-500 to-yellow-400 text-black font-bold rounded-xl
+           hover:from-yellow-400 hover:to-yellow-300 transition-all duration-200 active:scale-95
+           shadow-lg shadow-yellow-500/20 disabled:opacity-25 disabled:cursor-not-allowed;
+  }
+
+  .action-btn-call {
+    @apply bg-gradient-to-r from-blue-500 to-blue-400 text-white font-bold rounded-xl
+           hover:from-blue-400 hover:to-blue-300 transition-all duration-200 active:scale-95
+           shadow-lg shadow-blue-500/20 disabled:opacity-25 disabled:cursor-not-allowed;
+  }
+
+  /* ---- Preset Bet Buttons ---- */
+  .preset-btn {
+    @apply px-2 sm:px-2.5 py-1.5 sm:py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 font-medium rounded-lg
+           transition-all duration-200 active:scale-90 text-[9px] sm:text-[11px];
+  }
+
+  /* ---- Bet Slider ---- */
+  .bet-slider {
+    @apply appearance-none cursor-pointer rounded-full outline-none;
+    background: linear-gradient(to right, #374151, #6b7280);
+  }
+
+  .bet-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(245, 158, 11, 0.4);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    transition: all 0.15s ease;
+  }
+
+  .bet-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.15);
+    box-shadow: 0 2px 10px rgba(245, 158, 11, 0.6);
+  }
+
+  .bet-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+  }
+
+  .bet-slider::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(to right, #374151, #6b7280);
+  }
+}
+
+/* ================================================================
+   ANIMATIONS
+   ================================================================ */
+
+/* Card dealt animation — slide up + fade in + scale */
+@keyframes cardDealt {
+  0% {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.5) rotate(-10deg);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(4px) scale(1.05) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+}
+
+.animate-card-dealt {
+  animation: cardDealt 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Card back entrance */
+@keyframes cardBackDeal {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.6);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-card-back-deal {
+  animation: cardBackDeal 0.25s ease-out forwards;
+}
+
+/* Fade in */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Slide up */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+/* Slide down */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-down {
+  animation: slideDown 0.3s ease-out;
+}
+
+/* Chip stacking animation */
+@keyframes chipStack {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.8);
+  }
+  60% {
+    transform: translateY(-2px) scale(1.05);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-chip-stack {
+  animation: chipStack 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Bounce subtle (for dealer button) */
+@keyframes bounceSubtle {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+.animate-bounce-subtle {
+  animation: bounceSubtle 2s ease-in-out infinite;
+}
+
+/* Pulse turn (for active player highlight) */
+@keyframes pulseTurn {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(34, 197, 94, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(34, 197, 94, 0.3);
+  }
+}
+
+.animate-pulse-turn {
+  animation: pulseTurn 1.5s ease-in-out infinite;
+}
+
+/* Emoji float animation */
+@keyframes emojiFloat {
+  0% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translateX(-30%) translateY(-20px) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-10%) translateY(-40px) scale(0.8);
+  }
+}
+
+.animate-emoji-float {
+  animation: emojiFloat 2s ease-out forwards;
+}
+
+/* Pulse (generic) */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Spin */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ================================================================
+   CUSTOM SCROLLBAR
+   ================================================================ */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #4a5568;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #718096;
+}
+
+/* ================================================================
+   RESPONSIVE UTILITIES
+   ================================================================ */
+
+/* Touch-friendly: increase hit targets on mobile */
+@media (max-width: 640px) {
+  .action-btn-fold,
+  .action-btn-check,
+  .action-btn-call,
+  .preset-btn {
+    min-height: 36px;
+  }
+
+  .bet-slider::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+  }
+
+  .bet-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+/* Prevent layout shift on iOS */
+html {
+  -webkit-text-size-adjust: 100%;
+}
