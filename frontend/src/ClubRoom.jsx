@@ -175,11 +175,11 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
       setPot(data.pot || 0);
       setCurrentBet(data.currentBet || 0);
       setMinRaise(data.minRaise || 20);
-      setCurrentPlayerSeatIndex(data.currentPlayerSeatIndex || -1);
-      setDealerSeatIndex(data.dealerSeatIndex || -1);
-      setHandCount(data.handCount || 0);
-      setActionTimeRemaining(data.actionTimeRemaining || 0);
-      setActionTimerTotal(data.actionTimerTotal || 20);
+      setCurrentPlayerSeatIndex(data.currentPlayerSeatIndex ?? -1);
+      setDealerSeatIndex(data.dealerSeatIndex ?? -1);
+      setHandCount(data.handCount ?? 0);
+      setActionTimeRemaining(data.actionTimeRemaining ?? 0);
+      setActionTimerTotal(data.actionTimerTotal ?? 20);
       if (data.gameStatus) setGameState(data.gameStatus);
 
       // Update players from game state
@@ -221,8 +221,8 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
       setPot(data.pot || 0);
       setCurrentBet(data.currentBet || 0);
       setMinRaise(data.minRaise || 20);
-      setCurrentPlayerSeatIndex(data.currentPlayerSeatIndex || -1);
-      setDealerSeatIndex(data.dealerSeatIndex || -1);
+      setCurrentPlayerSeatIndex(data.currentPlayerSeatIndex ?? -1);
+      setDealerSeatIndex(data.dealerSeatIndex ?? -1);
       setHandCount(data.handCount || 0);
       setHoleCards(data.holeCards || []);
       if (data.gameStatus) setGameState(data.gameStatus);
