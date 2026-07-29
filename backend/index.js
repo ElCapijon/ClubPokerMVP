@@ -479,17 +479,17 @@ io.on('connection', (socket) => {
       const clubState = createClubState(userId, trimmedName, inviteCode);
       clubs.set(clubState.id, clubState);
 
-      // Persist to database
+      // Persist to database (user first, then club — clubs.host_user_id REFERENCES users.id)
       try {
+        await pool.query(
+          'INSERT INTO users (id, display_name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
+          [userId, trimmedName]
+        );
         await pool.query(
           `INSERT INTO clubs (id, invite_code, host_user_id, small_blind, big_blind, starting_stack, action_timer_seconds, allow_rebuys)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [clubState.id, inviteCode, userId, clubState.tableSettings.sb, clubState.tableSettings.bb,
            clubState.tableSettings.startingStack, clubState.tableSettings.timer, clubState.tableSettings.allowRebuys]
-        );
-        await pool.query(
-          'INSERT INTO users (id, display_name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
-          [userId, trimmedName]
         );
       } catch (dbErr) {
         console.error('[DB] Error persisting club:', dbErr.message);
