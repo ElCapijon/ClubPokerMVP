@@ -413,37 +413,20 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const leavingRef = useRef(false);
 
   const handleLeaveTable = useCallback(() => {
-    if (leavingRef.current) return; // Prevent double-click
+    if (leavingRef.current) return;
     leavingRef.current = true;
 
+    // Fire leave_ring_game (fire-and-forget) — the server processes
+    // the refund even if we navigate away immediately.
+    // The server-side disconnect handler's safety net catches
+    // any edge cases where the message doesn't reach the server.
     const socket = getSocket();
-    if (!socket) {
-      // Socket already gone — just navigate
-      onLeave();
-      return;
+    if (socket) {
+      socket.emit('leave_ring_game', { gameId: clubId });
     }
-
-    // Always use leave_ring_game to properly refund/cash out before navigating
-    // This works for both WAITING (refunds full stack) and active games (cashes out)
-    //
-    // Safety fallback: if the server doesn't respond within 5s, force-leave anyway
-    const fallbackTimer = setTimeout(() => {
-      onLeave();
-    }, 5000);
-
-    socket.emit('leave_ring_game', { gameId: clubId }, (err, data) => {
-      clearTimeout(fallbackTimer);
-      if (err) {
-        // Even if leave fails, navigate away — don't trap the user
-        addNotification(err.error || 'Failed to cash out', 'error');
-        onLeave();
-        return;
-      }
-      // Successfully refunded/cashed out — navigate to lobby
-      addNotification(`💵 Refunded ${data.cashOutAmount} chips`, 'success');
-      onLeave();
-    });
-  }, [clubId, addNotification, onLeave]);
+    // Navigate to lobby immediately
+    onLeave();
+  }, [clubId, onLeave]);
 
   // ─── Derived state ────────────────────────────────────────
   const isMyTurn = currentPlayerSeatIndex === mySeatIndex
