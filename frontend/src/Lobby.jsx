@@ -497,7 +497,7 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-600 mt-8">
-          Private • No real money • Just friends
+          Club Poker MVP
         </p>
       </div>
     </div>
