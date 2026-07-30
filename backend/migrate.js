@@ -1,6 +1,6 @@
 const pool = require('./db');
 
-const migrate = async () => {
+async function migrate() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -71,14 +71,27 @@ const migrate = async () => {
     await client.query('COMMIT');
     console.log('Migration completed successfully!');
     console.log('Tables created: users, clubs, hand_histories, challenges');
+    return { tables: ['users', 'clubs', 'hand_histories', 'challenges'] };
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);
     throw err;
   } finally {
     client.release();
-    await pool.end();
+    // Only close the pool when running as a standalone script
+    // When called from the API endpoint, the server needs the pool to stay open!
+    if (require.main === module) {
+      await pool.end();
+    }
   }
-};
+}
 
-migrate();
+// Auto-run when called directly via `node migrate.js`
+if (require.main === module) {
+  migrate().catch((err) => {
+    console.error('Migration failed:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { migrate };

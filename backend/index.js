@@ -54,6 +54,19 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
+// Migration trigger — run database migration
+const { migrate } = require('./migrate');
+app.get('/api/migrate', async (req, res) => {
+  try {
+    console.log('[Migrate] Starting database migration...');
+    const result = await migrate();
+    res.json({ success: true, message: 'Migration completed successfully', result });
+  } catch (err) {
+    console.error('[Migrate] Failed:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Production catch-all: serve index.html for all non-API routes
 if (isProduction) {
   app.get('*', (req, res) => {
