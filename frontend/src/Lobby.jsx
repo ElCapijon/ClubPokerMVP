@@ -1,147 +1,91 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { connect, getSocket } from './socket';
 
-// ─── Create Table Modal ─────────────────────────────────────
-function CreateTableModal({ onClose, onCreate }) {
-  const [tableName, setTableName] = useState('');
-  const [minBuyin, setMinBuyin] = useState(50);
-  const [maxBuyin, setMaxBuyin] = useState(1000);
-  const [smallBlind, setSmallBlind] = useState(10);
-  const [bigBlind, setBigBlind] = useState(20);
-  const [actionTimer, setActionTimer] = useState(20);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+// ─── Stake Level Card ─────────────────────────────────────────
+function StakeCard({ level, bankroll, onJoin }) {
+  const blindText = `${level.sb}/${level.bb}`;
+  const buyinText = `${level.minBuyin.toLocaleString()} - ${level.maxBuyin.toLocaleString()}`;
+  const canAfford = level.minBuyin <= bankroll;
 
-  const handleCreate = async () => {
-    setError('');
-    if (!tableName.trim()) { setError('Table name is required'); return; }
-    if (minBuyin < 50) { setError('Minimum buy-in is 50 chips'); return; }
-    if (maxBuyin > 50000000) { setError('Maximum buy-in is 50,000,000 chips'); return; }
-    if (minBuyin > maxBuyin) { setError('Min buy-in cannot exceed max buy-in'); return; }
-    if (smallBlind < 1 || bigBlind < 2) { setError('Invalid blind amounts'); return; }
-    if (tableName.trim().length > 30) { setError('Table name must be 30 characters or less'); return; }
-
-    setLoading(true);
-    const socket = getSocket();
-    if (!socket) {
-      setError('Not connected');
-      setLoading(false);
-      return;
-    }
-
-    socket.emit('create_ring_game', {
-      tableName: tableName.trim(),
-      minBuyin,
-      maxBuyin,
-      smallBlind,
-      bigBlind,
-      actionTimer,
-    }, (err, data) => {
-      setLoading(false);
-      if (err) { setError(err.error || 'Failed to create table'); return; }
-      onCreate(data);
-    });
+  // Generate consistent color per stake level
+  const colors = {
+    micro: { bg: 'from-emerald-600 to-emerald-800', badge: 'bg-emerald-500/20 text-emerald-400' },
+    low: { bg: 'from-blue-600 to-blue-800', badge: 'bg-blue-500/20 text-blue-400' },
+    medium: { bg: 'from-purple-600 to-purple-800', badge: 'bg-purple-500/20 text-purple-400' },
+    high: { bg: 'from-rose-600 to-rose-800', badge: 'bg-rose-500/20 text-rose-400' },
+    ultra: { bg: 'from-orange-600 to-orange-800', badge: 'bg-orange-500/20 text-orange-400' },
+    superHigh: { bg: 'from-red-700 to-red-900', badge: 'bg-red-500/20 text-red-400' },
   };
+  const c = colors[level.key] || colors.micro;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 w-full max-w-md animate-slide-up shadow-2xl">
-        <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-          <span>🎲</span> Create Table
-        </h2>
+    <div className={`relative bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden transition-all duration-200
+      hover:border-gray-700 hover:shadow-lg hover:shadow-black/20 group cursor-pointer
+      ${!canAfford ? 'opacity-60' : ''}`}
+      onClick={() => canAfford && onJoin(level)}
+    >
+      {/* Top gradient bar */}
+      <div className={`h-2 bg-gradient-to-r ${c.bg}`} />
 
-        <div className="space-y-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Table Name</label>
-            <input type="text" value={tableName}
-              onChange={(e) => setTableName(e.target.value.slice(0, 30))}
-              placeholder="e.g. High Rollers" maxLength={30}
-              className="input-field text-sm" autoFocus />
+      <div className="p-4">
+        {/* Name & badge */}
+        <div className="flex items-start justify-between mb-3">
+          <h3 className="text-sm font-bold text-white truncate">{level.name}</h3>
+          <span className={`shrink-0 px-2 py-0.5 text-[10px] rounded-full font-medium ${c.badge}`}>
+            {blindText}
+          </span>
+        </div>
+
+        {/* Buy-in range */}
+        <div className="space-y-2">
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Buy-in</span>
+            <span className="text-gray-300 font-mono">{buyinText}</span>
           </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Min Buy-in</label>
-              <input type="number" value={minBuyin}
-                onChange={(e) => setMinBuyin(Math.max(50, parseInt(e.target.value) || 50))}
-                min={50} max={50000000}
-                className="input-field text-sm" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Max Buy-in</label>
-              <input type="number" value={maxBuyin}
-                onChange={(e) => setMaxBuyin(Math.min(50000000, parseInt(e.target.value) || 1000))}
-                min={50} max={50000000}
-                className="input-field text-sm" />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Small Blind</label>
-              <input type="number" value={smallBlind}
-                onChange={(e) => setSmallBlind(Math.max(1, parseInt(e.target.value) || 1))}
-                min={1} className="input-field text-sm" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Big Blind</label>
-              <input type="number" value={bigBlind}
-                onChange={(e) => setBigBlind(Math.max(2, parseInt(e.target.value) || 2))}
-                min={2} className="input-field text-sm" />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Action Timer: {actionTimer}s
-            </label>
-            <input type="range" value={actionTimer}
-              onChange={(e) => setActionTimer(parseInt(e.target.value))}
-              min={10} max={60} step={5}
-              className="bet-slider w-full" />
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Blinds</span>
+            <span className="text-gray-300 font-mono">{blindText}</span>
           </div>
         </div>
 
-        {error && (
-          <div className="mt-3 bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
-            <span>⚠️ {error}</span>
+        {/* Join overlay */}
+        {canAfford && (
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-2xl">
+            <span className="px-4 py-2 bg-gradient-to-r from-green-600 to-green-500 text-white rounded-xl text-sm font-bold shadow-lg">
+              Join Game
+            </span>
           </div>
         )}
 
-        <div className="flex gap-2 mt-5">
-          <button onClick={onClose}
-            className="flex-1 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-sm font-semibold hover:bg-gray-700 transition-all active:scale-95">
-            Cancel
-          </button>
-          <button onClick={handleCreate} disabled={loading}
-            className="flex-1 py-2.5 bg-gradient-to-r from-poker-gold to-yellow-500 text-black rounded-xl text-sm font-bold hover:from-yellow-400 hover:to-yellow-300 transition-all active:scale-95 disabled:opacity-50">
-            {loading ? (
-              <span className="inline-block w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
-            ) : 'Create Table'}
-          </button>
-        </div>
+        {!canAfford && (
+          <div className="mt-2 text-[10px] text-red-400/70">
+            Need {level.minBuyin.toLocaleString()} chips to sit
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-// ─── Join Table Modal ───────────────────────────────────────
-function JoinTableModal({ game, bankroll, onClose, onJoin }) {
-  const [buyinAmount, setBuyinAmount] = useState(game?.minBuyin || 50);
+// ─── Join Modal ──────────────────────────────────────────────
+function JoinModal({ level, bankroll, onClose, onJoin }) {
+  const [buyinAmount, setBuyinAmount] = useState(level?.minBuyin || 50);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (game) {
-      setBuyinAmount(Math.min(Math.max(bankroll, game.minBuyin), game.maxBuyin));
+    if (level) {
+      const suggested = Math.min(Math.max(bankroll, level.minBuyin), level.maxBuyin);
+      setBuyinAmount(suggested);
     }
-  }, [game, bankroll]);
+  }, [level, bankroll]);
+
+  if (!level) return null;
 
   const handleJoin = async () => {
     setError('');
-    if (buyinAmount < game.minBuyin || buyinAmount > game.maxBuyin) {
-      setError(`Buy-in must be between ${game.minBuyin.toLocaleString()} and ${game.maxBuyin.toLocaleString()} chips`);
+    if (buyinAmount < level.minBuyin || buyinAmount > level.maxBuyin) {
+      setError(`Buy-in must be between ${level.minBuyin.toLocaleString()} and ${level.maxBuyin.toLocaleString()}`);
       return;
     }
     if (buyinAmount > bankroll) {
@@ -158,7 +102,7 @@ function JoinTableModal({ game, bankroll, onClose, onJoin }) {
     }
 
     socket.emit('join_ring_game', {
-      gameId: game.id,
+      stakeLevel: level.key,
       buyinAmount,
     }, (err, data) => {
       setLoading(false);
@@ -167,30 +111,19 @@ function JoinTableModal({ game, bankroll, onClose, onJoin }) {
     });
   };
 
-  if (!game) return null;
-
   const canAfford = buyinAmount <= bankroll;
-  const buyinRange = `${game.minBuyin.toLocaleString()} - ${game.maxBuyin.toLocaleString()}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 w-full max-w-sm animate-slide-up shadow-2xl">
-        <h2 className="text-lg font-bold text-white mb-1">Join Table</h2>
-        <p className="text-sm text-gray-400 mb-4">{game.tableName}</p>
+        <h2 className="text-lg font-bold text-white mb-1">{level.name}</h2>
+        <p className="text-sm text-gray-400 mb-4">Blinds {level.sb}/{level.bb}</p>
 
         <div className="bg-gray-800/50 rounded-xl p-3 mb-4 space-y-1.5">
           <div className="flex justify-between text-sm">
-            <span className="text-gray-400">Blinds</span>
-            <span className="text-white font-mono">{game.smallBlind}/{game.bigBlind}</span>
-          </div>
-          <div className="flex justify-between text-sm">
             <span className="text-gray-400">Buy-in Range</span>
-            <span className="text-white font-mono">{buyinRange}</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-gray-400">Players</span>
-            <span className="text-white">{game.seatedCount}/6</span>
+            <span className="text-white font-mono">{level.minBuyin.toLocaleString()} - {level.maxBuyin.toLocaleString()}</span>
           </div>
           <div className="flex justify-between text-sm border-t border-gray-700 pt-1.5 mt-1.5">
             <span className="text-gray-400">Your Bankroll</span>
@@ -202,16 +135,17 @@ function JoinTableModal({ game, bankroll, onClose, onJoin }) {
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1">Buy-in Amount</label>
-          <div className="flex gap-2">
-            <input type="number" value={buyinAmount}
-              onChange={(e) => setBuyinAmount(Math.min(Math.max(parseInt(e.target.value) || game.minBuyin, game.minBuyin), game.maxBuyin))}
-              min={game.minBuyin} max={Math.min(game.maxBuyin, bankroll)}
-              className="input-field text-sm flex-1" />
-          </div>
+          <input type="number" value={buyinAmount}
+            onChange={(e) => setBuyinAmount(Math.min(Math.max(parseInt(e.target.value) || level.minBuyin, level.minBuyin), level.maxBuyin))}
+            min={level.minBuyin} max={Math.min(level.maxBuyin, bankroll)}
+            className="input-field text-sm w-full" />
           <div className="flex gap-1.5 mt-2">
-            {[game.minBuyin, Math.floor((game.minBuyin + game.maxBuyin) / 2), game.maxBuyin].filter((v, i, a) => a.indexOf(v) === i).map(amount => (
+            {[level.minBuyin, Math.floor((level.minBuyin + level.maxBuyin) / 2), level.maxBuyin]
+              .filter((v, i, a) => a.indexOf(v) === i)
+              .filter(v => v <= bankroll)
+              .map(amount => (
               <button key={amount}
-                onClick={() => setBuyinAmount(Math.min(amount, bankroll))}
+                onClick={() => setBuyinAmount(amount)}
                 className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
                   buyinAmount === amount
                     ? 'bg-poker-gold text-black'
@@ -220,16 +154,6 @@ function JoinTableModal({ game, bankroll, onClose, onJoin }) {
                 {amount.toLocaleString()}
               </button>
             ))}
-            {bankroll > game.maxBuyin && (
-              <button onClick={() => setBuyinAmount(game.maxBuyin)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-                  buyinAmount === game.maxBuyin
-                    ? 'bg-poker-gold text-black'
-                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                }`}>
-                Max
-              </button>
-            )}
           </div>
         </div>
 
@@ -258,97 +182,17 @@ function JoinTableModal({ game, bankroll, onClose, onJoin }) {
   );
 }
 
-// ─── Table Card ──────────────────────────────────────────────
-function TableCard({ game, bankroll, onJoin }) {
-  const blindText = `${game.smallBlind}/${game.bigBlind}`;
-  const buyinText = `${game.minBuyin.toLocaleString()} - ${game.maxBuyin.toLocaleString()}`;
-  const fillPercent = (game.seatedCount / 6) * 100;
-  const canAfford = game.minBuyin <= bankroll;
-  const isInProgress = game.gameState !== 'WAITING';
-
-  // Generate a consistent color based on table name
-  const colors = ['from-blue-600 to-blue-800', 'from-purple-600 to-purple-800', 'from-emerald-600 to-emerald-800',
-    'from-rose-600 to-rose-800', 'from-amber-600 to-amber-800', 'from-cyan-600 to-cyan-800'];
-  const colorIdx = game.tableName.length % colors.length;
-
-  return (
-    <div className={`relative bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden transition-all duration-200
-      hover:border-gray-700 hover:shadow-lg hover:shadow-black/20 group cursor-pointer
-      ${!canAfford ? 'opacity-60' : ''}`}
-      onClick={() => canAfford && onJoin(game)}
-    >
-      {/* Top gradient bar */}
-      <div className={`h-2 bg-gradient-to-r ${colors[colorIdx]}`} />
-
-      <div className="p-4">
-        {/* Table name & status */}
-        <div className="flex items-start justify-between mb-3">
-          <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-bold text-white truncate">{game.tableName}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {blindText} blinds
-            </p>
-          </div>
-          {isInProgress && (
-            <span className="shrink-0 px-2 py-0.5 bg-green-500/20 text-green-400 text-[10px] rounded-full font-medium">
-              Live
-            </span>
-          )}
-        </div>
-
-        {/* Player count bar */}
-        <div className="mb-3">
-          <div className="flex justify-between text-xs mb-1">
-            <span className="text-gray-400">Players</span>
-            <span className={`font-medium ${game.seatedCount >= 6 ? 'text-red-400' : 'text-white'}`}>
-              {game.seatedCount}/6
-            </span>
-          </div>
-          <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-            <div className={`h-full rounded-full transition-all duration-500 ${colors[colorIdx].replace('from-', 'bg-').split(' ')[0].replace('from-', 'bg-')}`}
-              style={{ width: `${fillPercent}%` }} />
-          </div>
-        </div>
-
-        {/* Buy-in range */}
-        <div className="flex justify-between items-center text-xs">
-          <span className="text-gray-500">Buy-in</span>
-          <span className="text-gray-300 font-mono">{buyinText}</span>
-        </div>
-
-        {/* Join overlay on hover */}
-        {canAfford && (
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-2xl">
-            <span className="px-4 py-2 bg-gradient-to-r from-green-600 to-green-500 text-white rounded-xl text-sm font-bold shadow-lg">
-              {isInProgress ? 'Sit In' : 'Join Table'}
-            </span>
-          </div>
-        )}
-
-        {!canAfford && (
-          <div className="mt-2 text-[10px] text-red-400/70">
-            Bankroll too low for this table
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ====================================================================
 // MAIN LOBBY COMPONENT
 // ====================================================================
 export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
-  const [tables, setTables] = useState([]);
+  const [levels, setLevels] = useState([]);
   const [bankroll, setBankroll] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
   const [joinTarget, setJoinTarget] = useState(null);
-  const [error, setError] = useState('');
   const pollRef = useRef(null);
 
-  // Fetch bankroll & tables on mount
-  const fetchBankrollAndTables = useCallback(() => {
+  const fetchData = useCallback(() => {
     const socket = getSocket();
     if (!socket) return;
 
@@ -356,9 +200,9 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
       if (!err && data) setBankroll(data.bankroll);
     });
 
-    socket.emit('get_ring_games', {}, (err, data) => {
+    socket.emit('get_stake_levels', {}, (err, data) => {
       setLoading(false);
-      if (!err && data) setTables(data.games || []);
+      if (!err && data) setLevels(data.levels || []);
     });
   }, []);
 
@@ -366,13 +210,9 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
     const socket = connect();
     if (!socket) return;
 
-    // Initial fetch
-    fetchBankrollAndTables();
+    fetchData();
+    pollRef.current = setInterval(fetchData, 5000);
 
-    // Poll every 5 seconds for new tables
-    pollRef.current = setInterval(fetchBankrollAndTables, 5000);
-
-    // Listen for bankroll updates
     const onBankrollUpdate = (data) => {
       if (data.bankroll !== undefined) setBankroll(data.bankroll);
     };
@@ -383,26 +223,9 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
       if (pollRef.current) clearInterval(pollRef.current);
       socket.off('bankroll_updated', onBankrollUpdate);
     };
-  }, [fetchBankrollAndTables]);
+  }, [fetchData]);
 
-  const handleCreateTable = useCallback((data) => {
-    setShowCreate(false);
-    // Navigate to club room with ring game data
-    onEnterClub({
-      gameId: data.gameId,
-      tableName: data.tableName,
-      userId,
-      seatIndex: -1, // Host hasn't bought in yet
-      minBuyin: data.minBuyin,
-      maxBuyin: data.maxBuyin,
-    }, displayName);
-  }, [onEnterClub, userId, displayName]);
-
-  const handleJoinTable = useCallback((game) => {
-    setJoinTarget(game);
-  }, []);
-
-  const handleConfirmJoin = useCallback((data) => {
+  const handleJoinTable = useCallback((data) => {
     setJoinTarget(null);
     onEnterClub({
       gameId: data.gameId,
@@ -463,68 +286,39 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
 
       {/* ── Main Content ── */}
       <div className="relative max-w-4xl mx-auto px-4 py-6">
-        {/* Action Bar */}
-        <div className="flex items-center justify-between mb-6 animate-fade-in">
-          <div>
-            <h2 className="text-xl font-bold text-white">Active Tables</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {tables.length} table{tables.length !== 1 ? 's' : ''} available
-              {loading && <span className="ml-2 text-gray-600 animate-pulse">Loading...</span>}
-            </p>
-          </div>
-          <button onClick={() => setShowCreate(true)}
-            className="px-4 py-2.5 bg-gradient-to-r from-poker-gold to-yellow-500 text-black rounded-xl text-sm font-bold
-                       hover:from-yellow-400 hover:to-yellow-300 transition-all active:scale-95 shadow-lg shadow-yellow-600/20
-                       flex items-center gap-2">
-            <span>+</span>
-            Create Table
-          </button>
+        <div className="mb-6 animate-fade-in">
+          <h2 className="text-xl font-bold text-white">Choose Your Stakes</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Pick a stake level and buy in — we'll find you a seat
+            {loading && <span className="ml-2 text-gray-600 animate-pulse">Loading...</span>}
+          </p>
         </div>
 
-        {/* Table Grid */}
-        {!loading && tables.length === 0 ? (
+        {/* Stake Level Grid */}
+        {!loading && levels.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 animate-fade-in">
+            {levels.map(level => (
+              <StakeCard key={level.key} level={level} bankroll={bankroll} onJoin={setJoinTarget} />
+            ))}
+          </div>
+        ) : !loading ? (
           <div className="text-center py-20 animate-fade-in">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-800/50 mb-4">
               <span className="text-3xl opacity-50">🪑</span>
             </div>
-            <h3 className="text-lg font-semibold text-gray-400 mb-1">No Active Tables</h3>
-            <p className="text-sm text-gray-600 mb-6">Be the first to create one!</p>
-            <button onClick={() => setShowCreate(true)}
-              className="px-6 py-3 bg-gradient-to-r from-poker-gold to-yellow-500 text-black rounded-xl font-bold
-                         hover:from-yellow-400 hover:to-yellow-300 transition-all active:scale-95">
-              Create First Table
-            </button>
+            <h3 className="text-lg font-semibold text-gray-400 mb-1">No stake data available</h3>
+            <p className="text-sm text-gray-600">Try refreshing the page</p>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 animate-fade-in">
-            {tables.map(game => (
-              <TableCard key={game.id} game={game} bankroll={bankroll} onJoin={handleJoinTable} />
-            ))}
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div className="mt-4 bg-red-900/40 border border-red-800/50 rounded-xl p-4 text-red-300 text-sm animate-fade-in">
-            <span>⚠️ {error}</span>
-          </div>
-        )}
+        ) : null}
       </div>
 
-      {/* Modals */}
-      {showCreate && (
-        <CreateTableModal
-          onClose={() => setShowCreate(false)}
-          onCreate={handleCreateTable}
-        />
-      )}
-
+      {/* Join Modal */}
       {joinTarget && (
-        <JoinTableModal
-          game={joinTarget}
+        <JoinModal
+          level={joinTarget}
           bankroll={bankroll}
           onClose={() => setJoinTarget(null)}
-          onJoin={handleConfirmJoin}
+          onJoin={handleJoinTable}
         />
       )}
     </div>

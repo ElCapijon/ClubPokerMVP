@@ -329,28 +329,131 @@ function notifyBankroll(userId, bankroll) {
 }
 
 // ============================================================
+// Pre-defined Stake Levels (auto-table creation)
+// ============================================================
+const STAKE_LEVELS = {
+  micro: {
+    key: 'micro',
+    name: 'Micro Stakes',
+    sb: 10,
+    bb: 20,
+    minBuyin: 50,
+    maxBuyin: 500,
+    timer: 20,
+  },
+  low: {
+    key: 'low',
+    name: 'Low Stakes',
+    sb: 50,
+    bb: 100,
+    minBuyin: 500,
+    maxBuyin: 5000,
+    timer: 20,
+  },
+  medium: {
+    key: 'medium',
+    name: 'Medium Stakes',
+    sb: 500,
+    bb: 1000,
+    minBuyin: 5000,
+    maxBuyin: 50000,
+    timer: 20,
+  },
+  high: {
+    key: 'high',
+    name: 'High Stakes',
+    sb: 5000,
+    bb: 10000,
+    minBuyin: 50000,
+    maxBuyin: 500000,
+    timer: 20,
+  },
+  ultra: {
+    key: 'ultra',
+    name: 'Ultra Stakes',
+    sb: 50000,
+    bb: 100000,
+    minBuyin: 500000,
+    maxBuyin: 5000000,
+    timer: 20,
+  },
+  superHigh: {
+    key: 'superHigh',
+    name: 'Super High Roller',
+    sb: 500000,
+    bb: 1000000,
+    minBuyin: 5000000,
+    maxBuyin: 50000000,
+    timer: 20,
+  },
+};
+
+// Counter for auto-naming tables (e.g. "Micro Stakes #1")
+// Map<stakeLevel, number>
+const stakeCounters = new Map();
+
+// ============================================================
 // Ring Game State Factory
 // ============================================================
-function createRingGameState(hostUserId, hostDisplayName, tableName, minBuyin, maxBuyin, sb, bb, timer) {
+function createRingGameState(tableName, stakeConfig) {
   const seats = Array(MAX_SEATS).fill(null);
 
   return {
     id: uuidv4(),
-    tableName: tableName || 'Poker Table',
-    minBuyin,
-    maxBuyin,
-    hostId: hostUserId,
+    stakeLevel: stakeConfig.key,
+    tableName,
+    minBuyin: stakeConfig.minBuyin,
+    maxBuyin: stakeConfig.maxBuyin,
+    hostId: null,
     seats,
     tableSettings: {
-      sb,
-      bb,
-      timer: timer || 20,
+      sb: stakeConfig.sb,
+      bb: stakeConfig.bb,
+      timer: stakeConfig.timer || 20,
       allowRebuys: true,
     },
     gameState: 'WAITING',
     currentHand: null,
     createdAt: Date.now(),
   };
+}
+
+/** Find existing table at stake level with open seat, or create a new one */
+function findOrCreateTable(stakeLevel) {
+  // Look for an existing table at this stake level with an open seat
+  for (const [id, game] of ringGames) {
+    if (game.stakeLevel === stakeLevel) {
+      const seatIndex = findNextAvailableSeat(game.seats);
+      if (seatIndex !== -1) {
+        return { game, seatIndex, isNew: false };
+      }
+    }
+  }
+
+  // All tables full (or none exist) — create a new one
+  const config = STAKE_LEVELS[stakeLevel];
+  if (!config) return null;
+
+  const counter = (stakeCounters.get(stakeLevel) || 0) + 1;
+  stakeCounters.set(stakeLevel, counter);
+
+  const tableName = `${config.name} #${counter}`;
+  const game = createRingGameState(tableName, config);
+  ringGames.set(game.id, game);
+
+  // Persist to database
+  try {
+    pool.query(
+      `INSERT INTO ring_games (id, table_name, host_user_id, min_buyin, max_buyin, small_blind, big_blind, action_timer_seconds)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [game.id, game.tableName, null, game.minBuyin, game.maxBuyin,
+       game.tableSettings.sb, game.tableSettings.bb, game.tableSettings.timer]
+    ).catch(err => console.error('[DB] Error persisting table:', err.message));
+  } catch (dbErr) {
+    console.error('[DB] Error persisting table:', dbErr.message);
+  }
+
+  return { game, seatIndex: 0, isNew: true };
 }
 
 // ============================================================
@@ -693,223 +796,61 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ---------- GET RING GAMES ----------
-  socket.on('get_ring_games', async (data, callback) => {
+  // ---------- GET STAKE LEVELS ----------
+  socket.on('get_stake_levels', async (data, callback) => {
     try {
-      // Return in-memory games plus DB-active games
-      const activeGames = [];
-      for (const [id, game] of ringGames) {
-        if (game.gameState !== undefined) {
-          const seatedCount = game.seats.filter(s => s !== null).length;
-          activeGames.push({
-            id,
-            tableName: game.tableName,
-            hostId: game.hostId,
-            minBuyin: game.minBuyin,
-            maxBuyin: game.maxBuyin,
-            smallBlind: game.tableSettings.sb,
-            bigBlind: game.tableSettings.bb,
-            seatedCount,
-            maxPlayers: MAX_SEATS,
-            gameState: game.gameState,
-          });
-        }
-      }
-
-      // Also fetch from DB for persisted games not in memory (rare)
-      if (activeGames.length === 0) {
-        try {
-          const dbResult = await pool.query(
-            `SELECT id, table_name, host_user_id, min_buyin, max_buyin, small_blind, big_blind
-             FROM ring_games WHERE is_active = TRUE ORDER BY created_at DESC LIMIT 20`
-          );
-          for (const row of dbResult.rows) {
-            // Don't re-add if already in memory
-            if (!ringGames.has(row.id)) {
-              activeGames.push({
-                id: row.id,
-                tableName: row.table_name,
-                hostId: row.host_user_id,
-                minBuyin: row.min_buyin,
-                maxBuyin: row.max_buyin,
-                smallBlind: row.small_blind,
-                bigBlind: row.big_blind,
-                seatedCount: 0,
-                maxPlayers: MAX_SEATS,
-                gameState: 'WAITING',
-              });
-            }
-          }
-        } catch (dbErr) {
-          console.error('[DB] Error fetching ring games:', dbErr.message);
-        }
-      }
-
-      callback(null, { games: activeGames });
+      const levels = Object.values(STAKE_LEVELS).map(config => ({
+        key: config.key,
+        name: config.name,
+        sb: config.sb,
+        bb: config.bb,
+        minBuyin: config.minBuyin,
+        maxBuyin: config.maxBuyin,
+      }));
+      callback(null, { levels });
     } catch (err) {
-      console.error('[Get Ring Games Error]', err);
-      callback({ error: 'Failed to get ring games' });
+      callback({ error: 'Failed to get stake levels' });
     }
   });
 
-  // ---------- CREATE RING GAME ----------
-  socket.on('create_ring_game', async ({ tableName, minBuyin, maxBuyin, smallBlind, bigBlind, actionTimer, buyinAmount }, callback) => {
+  // ---------- JOIN RING GAME (by stake level) ----------
+  socket.on('join_ring_game', async ({ stakeLevel, buyinAmount }, callback) => {
     try {
       const userId = socket.userId;
       const displayName = socket.displayName;
 
-      // Validation
-      if (!tableName || tableName.trim().length === 0) {
-        return callback({ error: 'Table name is required' });
-      }
-      if (!minBuyin || !maxBuyin || minBuyin < 50 || maxBuyin > 50000000) {
-        return callback({ error: 'Buy-in range 50 - 50,000,000 chips' });
-      }
-      if (minBuyin > maxBuyin) {
-        return callback({ error: 'Min buy-in cannot exceed max buy-in' });
-      }
-      if (!smallBlind || !bigBlind || smallBlind < 1 || bigBlind < 2) {
-        return callback({ error: 'Invalid blind amounts' });
-      }
-      if (tableName.trim().length > 30) {
-        return callback({ error: 'Table name must be 30 characters or less' });
-      }
-
-      // Determine host buy-in amount
-      const hostBuyin = buyinAmount ? parseInt(buyinAmount) : parseInt(minBuyin);
-      if (hostBuyin < parseInt(minBuyin) || hostBuyin > parseInt(maxBuyin)) {
-        return callback({ error: `Host buy-in must be between ${parseInt(minBuyin)} and ${parseInt(maxBuyin)}` });
-      }
-
-      // Deduct from bankroll
-      let newBankroll;
-      try {
-        newBankroll = await deductBankroll(userId, hostBuyin);
-      } catch (e) {
-        return callback({ error: 'Insufficient bankroll to buy in' });
-      }
-
-      // Create ring game state
-      const gameState = createRingGameState(
-        userId,
-        displayName,
-        tableName.trim(),
-        parseInt(minBuyin),
-        parseInt(maxBuyin),
-        parseInt(smallBlind),
-        parseInt(bigBlind),
-        parseInt(actionTimer) || 20
-      );
-
-      // Seat the host at seat 0
-      let sessionId = null;
-      try {
-        const sessionResult = await pool.query(
-          `INSERT INTO player_sessions (user_id, game_id, buyin_amount, current_stack)
-           VALUES ($1, $2, $3, $4) RETURNING id`,
-          [userId, gameState.id, hostBuyin, hostBuyin]
-        );
-        sessionId = sessionResult.rows[0].id;
-      } catch (dbErr) {
-        console.error('[DB] Error creating host session:', dbErr.message);
-      }
-
-      gameState.seats[0] = {
-        userId,
-        userName: displayName,
-        stack: hostBuyin,
-        isReady: true,
-        isConnected: true,
-        isSittingOut: false,
-        sessionId,
-      };
-
-      ringGames.set(gameState.id, gameState);
-
-      // Persist game to database
-      try {
-        await pool.query(
-          `INSERT INTO ring_games (id, table_name, host_user_id, min_buyin, max_buyin, small_blind, big_blind, action_timer_seconds)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [gameState.id, gameState.tableName, userId, gameState.minBuyin, gameState.maxBuyin,
-           gameState.tableSettings.sb, gameState.tableSettings.bb, gameState.tableSettings.timer]
-        );
-      } catch (dbErr) {
-        console.error('[DB] Error persisting ring game:', dbErr.message);
-      }
-
-      socket.join(gameRoom(gameState.id));
-      socketToPlayer.set(socket.id, { gameId: gameState.id, userId, seatIndex: 0 });
-
-      notifyBankroll(userId, newBankroll);
-
-      console.log(`[Create Ring Game] ${displayName} created table "${gameState.tableName}" with ${hostBuyin} buy-in`);
-
-      callback(null, {
-        gameId: gameState.id,
-        tableName: gameState.tableName,
-        userId,
-        seatIndex: 0,
-        buyinAmount: hostBuyin,
-        minBuyin: gameState.minBuyin,
-        maxBuyin: gameState.maxBuyin,
-      });
-
-      broadcastTableState(gameState.id);
-    } catch (err) {
-      console.error('[Create Ring Game Error]', err);
-      callback({ error: 'Failed to create ring game' });
-    }
-  });
-
-  // ---------- JOIN RING GAME ----------
-  socket.on('join_ring_game', async ({ gameId, buyinAmount }, callback) => {
-    try {
-      const userId = socket.userId;
-      const displayName = socket.displayName;
-
-      const game = ringGames.get(gameId);
-      if (!game) {
-        return callback({ error: 'Table not found' });
-      }
-
-      // Check already seated
-      const existingSeat = game.seats.findIndex(s => s && s.userId === userId);
-      if (existingSeat !== -1) {
-        // Already at this table - rejoin
-        socket.join(gameRoom(gameId));
-        socketToPlayer.set(socket.id, { gameId, userId, seatIndex: existingSeat });
-        game.seats[existingSeat].isConnected = true;
-        console.log(`[Rejoin] ${displayName} already at table seat ${existingSeat}`);
-        callback(null, {
-          gameId,
-          tableName: game.tableName,
-          userId,
-          seatIndex: existingSeat,
-          buyinAmount: game.seats[existingSeat].stack,
-        });
-        broadcastTableState(gameId);
-        return;
+      // Validate stake level
+      const config = STAKE_LEVELS[stakeLevel];
+      if (!config) {
+        return callback({ error: 'Invalid stake level' });
       }
 
       // Validate buy-in
       const buyin = parseInt(buyinAmount);
-      if (!buyin || buyin < game.minBuyin || buyin > game.maxBuyin) {
-        return callback({ error: `Buy-in must be between ${game.minBuyin} and ${game.maxBuyin} chips` });
+      if (!buyin || buyin < config.minBuyin || buyin > config.maxBuyin) {
+        return callback({ error: `Buy-in must be between ${config.minBuyin} and ${config.maxBuyin} chips` });
       }
 
-      // Check if table is full
-      const seatIndex = findNextAvailableSeat(game.seats);
-      if (seatIndex === -1) {
-        return callback({ error: 'Table is full (max 6 players)' });
-      }
-
-      // Deduct from bankroll
+      // Check bankroll
       let newBankroll;
       try {
         newBankroll = await deductBankroll(userId, buyin);
       } catch (e) {
-        return callback({ error: 'Insufficient bankroll. You need ' + buyin + ' chips to buy in.' });
+        return callback({ error: `Insufficient bankroll. You need ${buyin} chips.` });
+      }
+
+      // Find or create a table at this stake level
+      const result = findOrCreateTable(stakeLevel);
+      if (!result) {
+        return callback({ error: 'Failed to find or create a table' });
+      }
+
+      const { game, seatIndex, isNew } = result;
+      const gameId = game.id;
+
+      // If newly created, set the first joiner as host
+      if (isNew) {
+        game.hostId = userId;
       }
 
       // Create player session
@@ -939,23 +880,24 @@ io.on('connection', (socket) => {
       socket.join(gameRoom(gameId));
       socketToPlayer.set(socket.id, { gameId, userId, seatIndex });
 
-      console.log(`[Join Ring Game] ${displayName} joined "${game.tableName}" with ${buyin} chips at seat ${seatIndex}`);
+      console.log(`[Join] ${displayName} joined "${game.tableName}" with ${buyin} chips (stakes: ${config.name})`);
 
       notifyBankroll(userId, newBankroll);
 
       callback(null, {
         gameId,
         tableName: game.tableName,
-        minBuyin: game.minBuyin,
-        maxBuyin: game.maxBuyin,
+        stakeLevel,
         userId,
         seatIndex,
         buyinAmount: buyin,
+        minBuyin: game.minBuyin,
+        maxBuyin: game.maxBuyin,
       });
 
       broadcastTableState(gameId);
-      
-      // Auto-start if enough players are ready (ring games: bought-in = ready)
+
+      // Auto-start if enough players are ready
       checkAutoStart(gameId);
     } catch (err) {
       console.error('[Join Ring Game Error]', err);
