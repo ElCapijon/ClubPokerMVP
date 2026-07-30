@@ -121,7 +121,7 @@ function EmojiBubble({ emoji, userName }) {
 // ====================================================================
 // MAIN COMPONENT
 // ====================================================================
-export default function ClubRoom({ clubData, displayName, onLeave }) {
+export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const { clubId, inviteCode, userId, seatIndex: mySeatIndex } = clubData;
   const [players, setPlayers] = useState(Array(6).fill(null));
   const [gameState, setGameState] = useState('WAITING');
@@ -175,10 +175,11 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
   // ─── Socket handlers ──────────────────────────────────────
   useEffect(() => {
     const socket = getSocket();
+    if (!socket) return;
 
     const onConnect = () => {
       setIsConnected(true);
-      socket.emit('rejoin_club', { clubId, userId }, (err) => {
+      socket.emit('rejoin_club', { clubId }, (err) => {
         if (err) addNotification('Failed to reconnect', 'error');
       });
     };
@@ -548,6 +549,13 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button onClick={onLogout}
+            className="text-gray-500 hover:text-gray-300 transition-colors p-1.5 shrink-0"
+            title="Logout">
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+          </button>
           <div className="bg-gray-800 rounded-lg px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5">
             <span className="text-[10px] sm:text-xs text-gray-400 hidden sm:inline">Code:</span>
             <span className="text-sm sm:text-lg font-mono font-bold text-poker-gold tracking-wider">{inviteCode}</span>

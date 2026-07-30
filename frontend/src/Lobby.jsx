@@ -1,36 +1,34 @@
 import React, { useState } from 'react';
 import { connect } from './socket';
 
-export default function Lobby({ onEnterClub, displayName, setDisplayName }) {
+export default function Lobby({ onEnterClub, displayName, onLogout }) {
   const [mode, setMode] = useState(null); // null | 'create' | 'join'
   const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleCreateClub = async () => {
-    if (!displayName.trim()) {
-      setError('Please enter a display name');
-      return;
-    }
     setError('');
     setLoading(true);
 
     const socket = connect();
-    socket.emit('create_club', { displayName: displayName.trim() }, (err, data) => {
+    if (!socket) {
+      setError('Not authenticated. Please log in again.');
+      setLoading(false);
+      return;
+    }
+
+    socket.emit('create_club', {}, (err, data) => {
       setLoading(false);
       if (err) {
         setError(err.error || 'Failed to create club');
         return;
       }
-      onEnterClub(data, displayName.trim());
+      onEnterClub(data, displayName);
     });
   };
 
   const handleJoinClub = async () => {
-    if (!displayName.trim()) {
-      setError('Please enter a display name');
-      return;
-    }
     if (!inviteCode.trim()) {
       setError('Please enter an invite code');
       return;
@@ -39,13 +37,19 @@ export default function Lobby({ onEnterClub, displayName, setDisplayName }) {
     setLoading(true);
 
     const socket = connect();
-    socket.emit('join_club', { displayName: displayName.trim(), inviteCode: inviteCode.trim() }, (err, data) => {
+    if (!socket) {
+      setError('Not authenticated. Please log in again.');
+      setLoading(false);
+      return;
+    }
+
+    socket.emit('join_club', { inviteCode: inviteCode.trim() }, (err, data) => {
       setLoading(false);
       if (err) {
         setError(err.error || 'Failed to join club');
         return;
       }
-      onEnterClub(data, displayName.trim());
+      onEnterClub(data, displayName);
     });
   };
 
@@ -57,6 +61,14 @@ export default function Lobby({ onEnterClub, displayName, setDisplayName }) {
         <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-felt/10 rounded-full blur-3xl" />
       </div>
 
+      {/* Logout button */}
+      <button
+        onClick={onLogout}
+        className="absolute top-4 right-4 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded-lg transition-all active:scale-95"
+      >
+        Logout
+      </button>
+
       <div className="relative w-full max-w-md">
         {/* Logo / Header */}
         <div className="text-center mb-8 animate-fade-in">
@@ -67,30 +79,7 @@ export default function Lobby({ onEnterClub, displayName, setDisplayName }) {
             Poker Club
           </h1>
           <p className="text-gray-400 text-sm">
-            Private tables for you and your friends
-          </p>
-        </div>
-
-        {/* Display Name Input */}
-        <div className="bg-gray-900/70 backdrop-blur-sm rounded-2xl border border-gray-800 p-6 mb-4 animate-slide-up">
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            Your Display Name
-          </label>
-          <input
-            type="text"
-            value={displayName}
-            onChange={(e) => {
-              setDisplayName(e.target.value.slice(0, 20));
-              setError('');
-            }}
-            onKeyDown={(e) => e.key === 'Enter' && mode === 'join' && handleJoinClub()}
-            placeholder="Enter your name..."
-            maxLength={20}
-            className="input-field text-lg"
-            autoFocus
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            {displayName.length}/20 characters
+            Welcome back, <span className="text-poker-gold font-semibold">{displayName}</span>
           </p>
         </div>
 
@@ -159,6 +148,7 @@ export default function Lobby({ onEnterClub, displayName, setDisplayName }) {
                 placeholder="e.g. ABC123"
                 maxLength={6}
                 className="input-field text-center text-2xl font-mono tracking-[0.3em]"
+                autoFocus
               />
               <p className="text-xs text-gray-500 mt-1 text-center">
                 6-character code

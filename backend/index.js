@@ -4,6 +4,8 @@ const path = require('path');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 const { generateInviteCode } = require('./InviteCode');
 const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction } = require('./GameHand');
 const { getNextBotName, resetBotNames, decideAction } = require('./botPlayer');
@@ -15,6 +17,7 @@ const pool = require('./db');
 const PORT = process.env.PORT || 3000;
 const MAX_SEATS = 6;
 const isProduction = process.env.NODE_ENV === 'production';
+const JWT_SECRET = process.env.JWT_SECRET || 'poker_club_jwt_secret_change_in_prod';
 
 // ============================================================
 // Express Setup
@@ -65,6 +68,104 @@ if (isProduction) {
 }
 
 // ============================================================
+// Auth Routes (register / login)
+// ============================================================
+
+// POST /api/auth/register
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, displayName, password } = req.body;
+
+    if (!email || !displayName || !password) {
+      return res.status(400).json({ error: 'Email, display name, and password are required' });
+    }
+    if (displayName.trim().length > 20) {
+      return res.status(400).json({ error: 'Display name must be 20 characters or less' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+
+    // Check if email already exists
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      `INSERT INTO users (email, display_name, password_hash)
+       VALUES ($1, $2, $3)
+       RETURNING id, email, display_name, avatar_color, created_at`,
+      [email, displayName.trim(), hashedPassword]
+    );
+
+    const user = result.rows[0];
+    const token = jwt.sign(
+      { userId: user.id, displayName: user.display_name, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      user: { id: user.id, email: user.email, displayName: user.display_name, avatarColor: user.avatar_color },
+      token,
+    });
+  } catch (err) {
+    console.error('[Register Error]', err);
+    res.status(500).json({ error: 'Failed to register' });
+  }
+});
+
+// POST /api/auth/login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    const result = await pool.query(
+      'SELECT id, email, display_name, password_hash, avatar_color, total_wins, hands_played FROM users WHERE email = $1',
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const user = result.rows[0];
+    const valid = await bcrypt.compare(password, user.password_hash);
+
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, displayName: user.display_name, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        avatarColor: user.avatar_color,
+        totalWins: user.total_wins,
+        handsPlayed: user.hands_played,
+      },
+      token,
+    });
+  } catch (err) {
+    console.error('[Login Error]', err);
+    res.status(500).json({ error: 'Failed to login' });
+  }
+});
+
+// ============================================================
 // Socket.io Setup
 // ============================================================
 const io = new Server(server, {
@@ -72,6 +173,26 @@ const io = new Server(server, {
     origin: isProduction ? false : (process.env.CORS_ORIGIN || 'http://localhost:5173'),
     methods: ['GET', 'POST'],
   },
+});
+
+// ============================================================
+// Socket.io Auth Middleware
+// Every connection must provide a valid JWT in the handshake
+// ============================================================
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth.token;
+    if (!token) {
+      return next(new Error('Authentication required'));
+    }
+    const decoded = jwt.verify(token, JWT_SECRET);
+    socket.userId = decoded.userId;
+    socket.displayName = decoded.displayName;
+    next();
+  } catch (err) {
+    console.error('[Socket Auth Error]', err.message);
+    next(new Error('Invalid or expired token'));
+  }
 });
 
 // ============================================================
@@ -448,8 +569,12 @@ io.on('connection', (socket) => {
   console.log(`[Connect] ${socket.id}`);
 
   // ---------- CREATE CLUB ----------
-  socket.on('create_club', async ({ displayName }, callback) => {
+  socket.on('create_club', async (data, callback) => {
     try {
+      // userId comes from the authenticated socket, not from the payload
+      const userId = socket.userId;
+      const displayName = socket.displayName;
+
       if (!displayName || displayName.trim().length === 0) {
         return callback({ error: 'Display name is required' });
       }
@@ -458,7 +583,6 @@ io.on('connection', (socket) => {
       }
 
       const trimmedName = displayName.trim();
-      const userId = uuidv4();
 
       // Generate a unique invite code
       let inviteCode;
@@ -479,12 +603,8 @@ io.on('connection', (socket) => {
       const clubState = createClubState(userId, trimmedName, inviteCode);
       clubs.set(clubState.id, clubState);
 
-      // Persist to database (user first, then club — clubs.host_user_id REFERENCES users.id)
+      // Persist to database
       try {
-        await pool.query(
-          'INSERT INTO users (id, display_name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
-          [userId, trimmedName]
-        );
         await pool.query(
           `INSERT INTO clubs (id, invite_code, host_user_id, small_blind, big_blind, starting_stack, action_timer_seconds, allow_rebuys)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -517,22 +637,38 @@ io.on('connection', (socket) => {
   });
 
   // ---------- JOIN CLUB ----------
-  socket.on('join_club', async ({ displayName, inviteCode }, callback) => {
+  socket.on('join_club', async ({ inviteCode }, callback) => {
     try {
-      if (!displayName || displayName.trim().length === 0) {
-        return callback({ error: 'Display name is required' });
-      }
       if (!inviteCode || inviteCode.trim().length === 0) {
         return callback({ error: 'Invite code is required' });
       }
 
-      const trimmedName = displayName.trim();
       const code = inviteCode.trim().toUpperCase();
+      const userId = socket.userId;
+      const displayName = socket.displayName;
 
       // Find the club
       const club = Array.from(clubs.values()).find(c => c.inviteCode === code);
       if (!club) {
         return callback({ error: 'Club not found. Check your invite code.' });
+      }
+
+      // Check if player is already in this club
+      const existingSeat = club.seats.findIndex(s => s && s.userId === userId);
+      if (existingSeat !== -1) {
+        // Player is already in this club — rejoin
+        socket.join(clubRoom(club.id));
+        socketToPlayer.set(socket.id, { clubId: club.id, userId, seatIndex: existingSeat });
+        club.seats[existingSeat].isConnected = true;
+        console.log(`[Rejoin] ${displayName} already in club at seat ${existingSeat}`);
+        callback(null, {
+          clubId: club.id,
+          inviteCode: club.inviteCode,
+          userId,
+          seatIndex: existingSeat,
+        });
+        broadcastClubState(club.id);
+        return;
       }
 
       // Check if club is full
@@ -541,12 +677,10 @@ io.on('connection', (socket) => {
         return callback({ error: 'Club is full (max 6 players)' });
       }
 
-      const userId = uuidv4();
-
       // Assign seat
       club.seats[seatIndex] = {
         userId,
-        userName: trimmedName,
+        userName: displayName,
         stack: club.tableSettings.startingStack,
         isReady: false,
         isConnected: true,
@@ -557,17 +691,7 @@ io.on('connection', (socket) => {
       socket.join(clubRoom(club.id));
       socketToPlayer.set(socket.id, { clubId: club.id, userId, seatIndex });
 
-      console.log(`[Join Club] ${trimmedName} joined club ${club.id} (code: ${code}) at seat ${seatIndex}`);
-
-      // Persist user to DB
-      try {
-        await pool.query(
-          'INSERT INTO users (id, display_name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
-          [userId, trimmedName]
-        );
-      } catch (dbErr) {
-        console.error('[DB] Error persisting user:', dbErr.message);
-      }
+      console.log(`[Join Club] ${displayName} joined club ${club.id} (code: ${code}) at seat ${seatIndex}`);
 
       callback(null, {
         clubId: club.id,
@@ -771,9 +895,11 @@ io.on('connection', (socket) => {
   });
 
   // ---------- RECONNECT / REJOIN ----------
-  socket.on('rejoin_club', ({ clubId, userId }, callback) => {
+  socket.on('rejoin_club', ({ clubId }, callback) => {
     const club = clubs.get(clubId);
     if (!club) return callback({ error: 'Club not found' });
+
+    const userId = socket.userId;
 
     // Find the player's seat
     const seatIndex = club.seats.findIndex(s => s && s.userId === userId);
