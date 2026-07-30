@@ -293,20 +293,31 @@ const lastActions = new Map();
 // Bankroll Helpers
 // ============================================================
 
-/** Get a player's bankroll from DB */
-async function getBankroll(userId) {
-  const result = await pool.query('SELECT bankroll FROM users WHERE id = $1', [userId]);
-  return result.rows.length > 0 ? parseInt(result.rows[0].bankroll) : 10000;
+/** Check if a user exists in the DB */
+async function userExists(userId) {
+  const result = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+  return result.rows.length > 0;
 }
 
-/** Deduct from bankroll and return new balance */
+/** Get a player's bankroll from DB. Returns 0 if user not found. */
+async function getBankroll(userId) {
+  const result = await pool.query('SELECT bankroll FROM users WHERE id = $1', [userId]);
+  return result.rows.length > 0 ? parseInt(result.rows[0].bankroll) : 0;
+}
+
+/** Deduct from bankroll and return new balance. Throws with descriptive message. */
 async function deductBankroll(userId, amount) {
+  // First check if user exists
+  const exists = await userExists(userId);
+  if (!exists) {
+    throw new Error('USER_NOT_FOUND');
+  }
   const result = await pool.query(
     'UPDATE users SET bankroll = bankroll - $1 WHERE id = $2 AND bankroll >= $1 RETURNING bankroll',
     [amount, userId]
   );
   if (result.rows.length === 0) {
-    throw new Error('Insufficient bankroll');
+    throw new Error('INSUFFICIENT_BANKROLL');
   }
   return parseInt(result.rows[0].bankroll);
 }
@@ -790,6 +801,13 @@ io.on('connection', (socket) => {
   socket.on('get_bankroll', async (data, callback) => {
     try {
       const bankroll = await getBankroll(socket.userId);
+      // If bankroll is 0 and user doesn't exist, session is invalid
+      if (bankroll === 0) {
+        const exists = await userExists(socket.userId);
+        if (!exists) {
+          return callback({ error: 'SESSION_EXPIRED', redirect: 'auth' });
+        }
+      }
       callback(null, { bankroll });
     } catch (err) {
       callback({ error: 'Failed to get bankroll' });
@@ -836,7 +854,10 @@ io.on('connection', (socket) => {
       try {
         newBankroll = await deductBankroll(userId, buyin);
       } catch (e) {
-        return callback({ error: `Insufficient bankroll. You need ${buyin} chips.` });
+        if (e.message === 'USER_NOT_FOUND') {
+          return callback({ error: 'SESSION_EXPIRED', redirect: 'auth' });
+        }
+        return callback({ error: `Insufficient bankroll. You have less than ${buyin} chips.` });
       }
 
       // Find or create a table at this stake level
@@ -1267,6 +1288,9 @@ io.on('connection', (socket) => {
       try {
         newBankroll = await deductBankroll(socket.userId, buyin);
       } catch (e) {
+        if (e.message === 'USER_NOT_FOUND') {
+          return callback && callback({ error: 'SESSION_EXPIRED', redirect: 'auth' });
+        }
         return callback && callback({ error: 'Insufficient bankroll for rebuy' });
       }
 

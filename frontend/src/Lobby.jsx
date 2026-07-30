@@ -106,7 +106,16 @@ function JoinModal({ level, bankroll, onClose, onJoin }) {
       buyinAmount,
     }, (err, data) => {
       setLoading(false);
-      if (err) { setError(err.error || 'Failed to join'); return; }
+      if (err) {
+        if (err.error === 'SESSION_EXPIRED') {
+          localStorage.removeItem('poker_club_auth');
+          localStorage.removeItem('poker_club_session');
+          window.location.reload();
+          return;
+        }
+        setError(err.error || 'Failed to join');
+        return;
+      }
       onJoin(data);
     });
   };
@@ -197,6 +206,13 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
     if (!socket) return;
 
     socket.emit('get_bankroll', {}, (err, data) => {
+      if (err && err.error === 'SESSION_EXPIRED') {
+        // User doesn't exist in DB anymore — force re-login
+        localStorage.removeItem('poker_club_auth');
+        localStorage.removeItem('poker_club_session');
+        window.location.reload();
+        return;
+      }
       if (!err && data) setBankroll(data.bankroll);
     });
 
