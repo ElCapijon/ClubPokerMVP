@@ -18,7 +18,7 @@ async function migrate() {
       CREATE TABLE users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email VARCHAR(255) UNIQUE NOT NULL,
-        display_name VARCHAR(20) NOT NULL,
+        display_name VARCHAR(20) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         avatar_color VARCHAR(7) DEFAULT '#FFD700',
         total_wins INT DEFAULT 0,

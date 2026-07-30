@@ -151,9 +151,15 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     // Check if email already exists
-    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (existing.rows.length > 0) {
+    const existingEmail = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingEmail.rows.length > 0) {
       return res.status(409).json({ error: 'Email already registered' });
+    }
+
+    // Check if display name already exists
+    const existingName = await pool.query('SELECT id FROM users WHERE display_name = $1', [displayName.trim()]);
+    if (existingName.rows.length > 0) {
+      return res.status(409).json({ error: 'Display name already taken. Please choose another.' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
