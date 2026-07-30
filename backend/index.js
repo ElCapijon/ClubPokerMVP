@@ -55,9 +55,22 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
-// Migration trigger — run database migration
+// Migration trigger — run database migration (restricted to host only in production)
 const { migrate } = require('./migrate');
 app.get('/api/migrate', async (req, res) => {
+  if (isProduction) {
+    // In production, require JWT auth
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: 'Authentication required. Use a JWT token from your logged-in session.' });
+    }
+    try {
+      jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return res.status(403).json({ error: 'Invalid token. Log in on the site first, then visit this endpoint.' });
+    }
+  }
   try {
     console.log('[Migrate] Starting database migration...');
     const result = await migrate();
