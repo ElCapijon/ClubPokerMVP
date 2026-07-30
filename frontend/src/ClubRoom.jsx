@@ -9,12 +9,14 @@ const PRESET_EMOJIS = ['😎', '🤡', '😱', '🔥', '💪', '🃏', '🍀', '
 // Seat positions for the oval table layout (clockwise from bottom-center)
 // Pushed up slightly to leave room for big hole cards + community cards below
 const SEAT_POSITIONS = [
-  { top: 70, left: 50, label: 'bottom' },      // You (bottom center — pushed up for cards below)
-  { top: 62, left: 10, label: 'bottom-left' }, // Bottom left
-  { top: 24, left: 6,  label: 'top-left' },    // Top left
-  { top: 5,  left: 50, label: 'top' },         // Top center
-  { top: 24, left: 94, label: 'top-right' },   // Top right
-  { top: 62, left: 90, label: 'bottom-right' },// Bottom right
+  // Professional 6-max coordinate layout (like PokerStars/GGPoker)
+  // Percentages relative to the table container
+  { top: 78, left: 50 },  // Seat 0: Hero at bottom center
+  { top: 66, left: 16 },  // Seat 1: Bottom-left
+  { top: 28, left: 8  },  // Seat 2: Top-left (pushed out for space)
+  { top: 7,  left: 50 },  // Seat 3: Top center
+  { top: 28, left: 92 },  // Seat 4: Top-right (pushed out for space)
+  { top: 66, left: 84 },  // Seat 5: Bottom-right
 ];
 
 // ─── Card Sizes ──────────────────────────────────────────────
