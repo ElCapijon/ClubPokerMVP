@@ -43,6 +43,20 @@ export default function App() {
   const [reconnectError, setReconnectError] = useState('');
 
   useEffect(() => {
+    // Migration cleanup: clear old-format data from before ring games migration
+    try {
+      const oldSession = localStorage.getItem('poker_club_session');
+      if (oldSession) {
+        const parsed = JSON.parse(oldSession);
+        // Old format had clubId/inviteCode, new format uses gameId
+        if (parsed && parsed.clubId && !parsed.gameId) {
+          localStorage.removeItem('poker_club_session');
+          localStorage.removeItem('poker_club_auth');
+          console.log('[App] Cleared old-format session and auth data (migration)');
+        }
+      }
+    } catch (e) { /* ignore */ }
+
     const auth = loadAuth();
     if (auth && auth.token && auth.user) {
       setDisplayName(auth.user.displayName || '');
