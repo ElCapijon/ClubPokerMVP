@@ -146,6 +146,56 @@ app.post('/api/admin/credit', async (req, res) => {
   }
 });
 
+// ============================================================
+// HTTP Game Leave — Reliable refund via HTTP (no socket race)
+// ============================================================
+app.post('/api/games/leave', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Find the player in any active ring game
+    let foundGame = null;
+    let foundSeatIndex = -1;
+    let foundSeat = null;
+
+    for (const [gameId, game] of ringGames) {
+      const idx = game.seats.findIndex(s => s && s.userId === userId);
+      if (idx !== -1) {
+        foundGame = game;
+        foundSeatIndex = idx;
+        foundSeat = game.seats[idx];
+        break;
+      }
+    }
+
+    if (!foundGame || !foundSeat) {
+      return res.status(404).json({ error: 'Not seated at any table' });
+    }
+
+    const refundAmount = foundSeat.stack || 0;
+
+    // Refund to bankroll — ONLY clear seat if refund succeeds
+    try {
+      const newBankroll = await addToBankroll(userId, refundAmount);
+      console.log(`[Leave-HTTP] ${foundSeat.userName} refunded ${refundAmount} chips. New bankroll: ${newBankroll}`);
+
+      // Only clear seat after successful refund
+      cleanupSeat(foundGame, foundSeatIndex, foundSeat, userId, foundGame.id);
+      broadcastTableState(foundGame.id);
+      notifyBankroll(userId, newBankroll);
+
+      return res.json({ success: true, refundAmount, bankroll: newBankroll });
+    } catch (e) {
+      console.error('[Leave-HTTP] Refund failed:', e.message);
+      // Seat stays — player can retry or disconnect handler will catch
+      return res.status(500).json({ error: 'Failed to refund, seat preserved' });
+    }
+  } catch (err) {
+    console.error('[Leave-HTTP Error]', err);
+    res.status(500).json({ error: 'Failed to leave game' });
+  }
+});
+
 // Production catch-all: serve index.html
 if (isProduction) {
   app.get('*', (req, res) => {

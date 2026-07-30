@@ -1,5 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { getSocket } from './socket';
+import { getToken } from './auth';
+
+const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:3000');
 
 const MAX_SEATS = 6;
 
@@ -410,23 +413,28 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     });
   }, [clubId, addNotification]);
 
-  const leavingRef = useRef(false);
-
   const handleLeaveTable = useCallback(() => {
-    if (leavingRef.current) return;
-    leavingRef.current = true;
-
-    // Fire leave_ring_game (fire-and-forget) — the server processes
-    // the refund even if we navigate away immediately.
-    // The server-side disconnect handler's safety net catches
-    // any edge cases where the message doesn't reach the server.
-    const socket = getSocket();
-    if (socket) {
-      socket.emit('leave_ring_game', { gameId: clubId });
-    }
-    // Navigate to lobby immediately
-    onLeave();
-  }, [clubId, onLeave]);
+    // Use HTTP endpoint (not socket) to avoid race conditions.
+    // This is a simple POST that refunds the buy-in and clears the seat.
+    // We navigate to lobby regardless of the result (don't trap the user).
+    fetch(`${API_BASE}/api/games/leave`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${getToken()}`,
+      },
+    }).then(r => r.json()).then(data => {
+      if (data.success) {
+        console.log(`[Leave] Refunded ${data.refundAmount} chips`);
+      } else {
+        console.warn('[Leave] Failed:', data.error);
+      }
+    }).catch(err => {
+      console.error('[Leave] Error:', err);
+    }).finally(() => {
+      onLeave();
+    });
+  }, [onLeave]);
 
   // ─── Derived state ────────────────────────────────────────
   const isMyTurn = currentPlayerSeatIndex === mySeatIndex
