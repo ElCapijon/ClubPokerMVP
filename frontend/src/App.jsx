@@ -161,6 +161,15 @@ export default function App() {
     setView('lobby');
   }, []);
 
+  const handleLogout = useCallback(() => {
+    clearSession();
+    clearAuth();
+    disconnect();
+    setGameData(null);
+    setDisplayName('');
+    setView('auth');
+  }, []);
+
   // ─── Auth Handlers ──────────────────────────────────────────
 
   const handleRegister = useCallback(async ({ email, displayName, password }) => {
