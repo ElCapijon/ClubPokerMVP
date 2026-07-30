@@ -7,7 +7,6 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction } = require('./GameHand');
-const { getNextBotName, resetBotNames, decideAction } = require('./botPlayer');
 const ChallengeTracker = require('./ChallengeTracker');
 const pool = require('./db');
 
@@ -107,6 +106,43 @@ app.get('/api/challenges', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('[Challenges API] Error:', err.message);
     res.status(500).json({ error: 'Failed to get challenges' });
+  }
+});
+
+// ============================================================
+// Admin — Credit chips to a player
+// ============================================================
+const CREDIT_SECRET = process.env.CREDIT_SECRET || 'poker_admin_credit';
+app.post('/api/admin/credit', async (req, res) => {
+  try {
+    const { secret, displayName, amount } = req.body;
+
+    if (secret !== CREDIT_SECRET) {
+      return res.status(403).json({ error: 'Invalid secret' });
+    }
+
+    if (!displayName || !amount || amount <= 0) {
+      return res.status(400).json({ error: 'displayName and positive amount required' });
+    }
+
+    const userResult = await pool.query('SELECT id, display_name, bankroll FROM users WHERE display_name = $1', [displayName]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: `User "${displayName}" not found` });
+    }
+
+    const user = userResult.rows[0];
+    const result = await pool.query(
+      'UPDATE users SET bankroll = bankroll + $1 WHERE id = $2 RETURNING bankroll',
+      [amount, user.id]
+    );
+
+    const newBankroll = parseInt(result.rows[0].bankroll);
+    console.log(`[Admin] Credited ${amount} chips to ${displayName}. New bankroll: ${newBankroll}`);
+
+    res.json({ success: true, displayName, credited: amount, newBankroll });
+  } catch (err) {
+    console.error('[Admin Credit Error]', err);
+    res.status(500).json({ error: 'Failed to credit chips' });
   }
 });
 
@@ -501,7 +537,6 @@ function broadcastTableState(gameId) {
       isConnected: seat.isConnected,
       isHost: seat.userId === game.hostId,
       isSittingOut: seat.isSittingOut || false,
-      isBot: seat.isBot || false,
     };
   });
 
@@ -550,70 +585,6 @@ function clearActionTimer(gameId) {
   }
 }
 
-function processBotAction(gameId) {
-  const game = ringGames.get(gameId);
-  if (!game || !game.currentHand) return;
-
-  const hand = game.currentHand;
-  if (hand.gameStatus === GAME_STATES.SHOWDOWN || hand.gameStatus === GAME_STATES.HAND_COMPLETE) return;
-
-  const currentPlayer = hand.players[hand.currentPlayerIndex];
-  if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) return;
-
-  const seat = game.seats[currentPlayer.seatIndex];
-  if (!seat || !seat.isBot) return;
-
-  const decision = decideAction(hand, currentPlayer.seatIndex);
-  if (!decision) return;
-
-  console.log(`[Bot] ${seat.userName} decides to ${decision.action}${decision.amount ? ' $' + decision.amount : ''}`);
-
-  const result = handleAction(hand, currentPlayer.seatIndex, decision.action, decision.amount);
-  if (result.error) return;
-
-  recordAction(gameId, currentPlayer.seatIndex, decision.action, decision.amount);
-
-  game.gameState = hand.gameStatus;
-  for (const hp of hand.players) {
-    const s = game.seats[hp.seatIndex];
-    if (s) s.stack = hp.stack;
-  }
-
-  broadcastGameState(gameId);
-  clearActionTimer(gameId);
-
-  if (isHandComplete(hand)) {
-    trackHandComplete(hand);
-    lastActions.delete(gameId);
-    io.to(gameRoom(gameId)).emit('hand_complete', {
-      handResult: hand.handResult,
-      communityCards: hand.communityCards,
-      players: hand.players.map(p => ({
-        seatIndex: p.seatIndex,
-        userName: p.userName,
-        holeCards: p.holeCards,
-        stack: p.stack,
-      })),
-    });
-    setTimeout(() => {
-      const g = ringGames.get(gameId);
-      if (!g) return;
-      const nextHandCount = (handCounters.get(gameId) || 0) + 1;
-      const nextHand = createHand(g, nextHandCount);
-      if (nextHand) {
-        startHand(nextHand);
-        g.currentHand = nextHand;
-        g.gameState = nextHand.gameStatus;
-        handCounters.set(gameId, nextHandCount);
-        broadcastGameState(gameId);
-        setActionTimer(gameId);
-      }
-    }, 12000);
-  } else {
-    setActionTimer(gameId);
-  }
-}
-
 function setActionTimer(gameId) {
   clearActionTimer(gameId);
 
@@ -625,14 +596,6 @@ function setActionTimer(gameId) {
 
   const currentPlayer = hand.players[hand.currentPlayerIndex];
   if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) return;
-
-  const seat = game.seats[currentPlayer.seatIndex];
-  if (seat && seat.isBot) {
-    const botDelay = 800 + Math.random() * 1200;
-    const botTimeout = setTimeout(() => processBotAction(gameId), botDelay);
-    actionTimers.set(gameId, botTimeout);
-    return;
-  }
 
   const timerMs = (hand.actionTimer || 20) * 1000;
 
@@ -767,6 +730,39 @@ function trackHandComplete(hand) {
         ChallengeTracker.trackStat(p.userId, 'showdownsReached', 1);
       }
     });
+  }
+}
+
+/**
+ * Clean up a player's seat after successful refund/cash-out.
+ * Updates session, clears seat, handles host reassignment.
+ */
+function cleanupSeat(game, seatIndex, seat, userId, gameId) {
+  // Update player session
+  if (seat.sessionId) {
+    pool.query(
+      'UPDATE player_sessions SET current_stack = $1, left_at = NOW() WHERE id = $2',
+      [0, seat.sessionId]
+    ).catch(err => console.error('[DB] Error updating session:', err.message));
+  }
+
+  // Clear the seat
+  game.seats[seatIndex] = null;
+  console.log(`[Cleanup] Seat ${seatIndex} cleared for ${seat.userName}`);
+
+  // If host left, reassign or deactivate
+  if (seat.userId === game.hostId) {
+    const nextPlayer = game.seats.find(s => s);
+    if (nextPlayer) {
+      game.hostId = nextPlayer.userId;
+      console.log(`[Host] New host for ${gameId}: ${nextPlayer.userName}`);
+    } else {
+      // No players left — deactivate
+      ringGames.delete(gameId);
+      pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId])
+        .catch(err => console.error('[DB] Error deactivating game:', err.message));
+      console.log(`[Game] ${gameId} deactivated (no players)`);
+    }
   }
 }
 
@@ -916,7 +912,6 @@ io.on('connection', (socket) => {
           isConnected: seat.isConnected,
           isHost: seat.userId === game.hostId,
           isSittingOut: seat.isSittingOut || false,
-          isBot: seat.isBot || false,
         };
       });
 
@@ -995,7 +990,7 @@ io.on('connection', (socket) => {
 
       // If host left, assign new host or mark inactive
       if (seat.userId === game.hostId) {
-        const nextPlayer = game.seats.find(s => s && !s.isBot);
+        const nextPlayer = game.seats.find(s => s);
         if (nextPlayer) {
           game.hostId = nextPlayer.userId;
           console.log(`[Host] New host for ${gameId}: ${nextPlayer.userName}`);
@@ -1342,96 +1337,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ---------- ADD BOTS ----------
-  socket.on('add_bots', ({ gameId }, callback) => {
-    try {
-      const playerInfo = socketToPlayer.get(socket.id);
-      if (!playerInfo || playerInfo.gameId !== gameId) {
-        return callback && callback({ error: 'Not at this table' });
-      }
-
-      const game = ringGames.get(gameId);
-      if (!game) {
-        return callback && callback({ error: 'Table not found' });
-      }
-
-      if (playerInfo.userId !== game.hostId) {
-        return callback && callback({ error: 'Only the host can add bots' });
-      }
-
-      if (game.gameState !== 'WAITING') {
-        return callback && callback({ error: 'Can only add bots before the game starts' });
-      }
-
-      let botsAdded = 0;
-      for (let i = 0; i < MAX_SEATS; i++) {
-        if (game.seats[i] === null) {
-          // Bots buy in for the average of min/max
-          const botBuyin = Math.floor((game.minBuyin + game.maxBuyin) / 2);
-          game.seats[i] = {
-            userId: `bot_${uuidv4()}`,
-            userName: getNextBotName(),
-            stack: botBuyin,
-            isReady: true,
-            isConnected: true,
-            isSittingOut: false,
-            isBot: true,
-          };
-          botsAdded++;
-        }
-      }
-
-      console.log(`[Bots] Added ${botsAdded} bots to game ${gameId}`);
-      broadcastTableState(gameId);
-      checkAutoStart(gameId);
-
-      callback && callback(null, { botsAdded });
-    } catch (err) {
-      console.error('[Add Bots Error]', err);
-      callback && callback({ error: 'Failed to add bots' });
-    }
-  });
-
-  // ---------- REMOVE BOTS ----------
-  socket.on('remove_bots', ({ gameId }, callback) => {
-    try {
-      const playerInfo = socketToPlayer.get(socket.id);
-      if (!playerInfo || playerInfo.gameId !== gameId) {
-        return callback && callback({ error: 'Not at this table' });
-      }
-
-      const game = ringGames.get(gameId);
-      if (!game) {
-        return callback && callback({ error: 'Table not found' });
-      }
-
-      if (playerInfo.userId !== game.hostId) {
-        return callback && callback({ error: 'Only the host can remove bots' });
-      }
-
-      if (game.gameState !== 'WAITING') {
-        return callback && callback({ error: 'Can only remove bots before the game starts' });
-      }
-
-      let botsRemoved = 0;
-      for (let i = 0; i < MAX_SEATS; i++) {
-        if (game.seats[i] && game.seats[i].isBot) {
-          game.seats[i] = null;
-          botsRemoved++;
-        }
-      }
-
-      resetBotNames();
-
-      console.log(`[Bots] Removed ${botsRemoved} bots from game ${gameId}`);
-      broadcastTableState(gameId);
-      callback && callback(null, { botsRemoved });
-    } catch (err) {
-      console.error('[Remove Bots Error]', err);
-      callback && callback({ error: 'Failed to remove bots' });
-    }
-  });
-
   // ---------- REFUND BUY-IN (manual recovery) ----------
   socket.on('refund_buyin', async ({ gameId }, callback) => {
     try {
@@ -1535,48 +1440,30 @@ io.on('connection', (socket) => {
           // ── REFUND SAFETY NET ──────────────────────────────────
           // If the game NEVER started (WAITING), refund the player's buy-in
           // and free their seat. Prevents lost chips from crashes.
+          // IMPORTANT: The refund MUST complete BEFORE we clear the seat,
+          // otherwise a failed DB query silently eats the player's chips.
           if (game.gameState === 'WAITING') {
             const refundAmount = seat.stack || 0;
             if (refundAmount > 0 && !userId.startsWith('bot_')) {
-              (async () => {
-                try {
-                  const newBankroll = await addToBankroll(userId, refundAmount);
+              // Await the refund before touching the seat
+              addToBankroll(userId, refundAmount)
+                .then(newBankroll => {
                   console.log(`[Refund] ${seat.userName} refunded ${refundAmount} chips (game never started). New bankroll: ${newBankroll}`);
                   notifyBankroll(userId, newBankroll);
-                } catch (refundErr) {
-                  console.error('[Refund] Failed to refund:', refundErr.message);
-                }
-              })();
+
+                  // ── Only clear seat AFTER successful refund ──
+                  cleanupSeat(game, seatIndex, seat, userId, gameId);
+                  broadcastTableState(gameId);
+                })
+                .catch(refundErr => {
+                  console.error(`[Refund] FAILED for ${seat.userName} (${refundAmount} chips): ${refundErr.message}`);
+                  // Seat stays — player can reconnect and retry
+                });
+            } else {
+              // No refund needed (0 stack or bot) — just clean up
+              cleanupSeat(game, seatIndex, seat, userId, gameId);
+              broadcastTableState(gameId);
             }
-
-            // Update player session
-            if (seat.sessionId) {
-              pool.query(
-                'UPDATE player_sessions SET current_stack = $1, left_at = NOW() WHERE id = $2',
-                [0, seat.sessionId]
-              ).catch(err => console.error('[DB] Error updating session:', err.message));
-            }
-
-            // Clear the seat
-            game.seats[seatIndex] = null;
-            console.log(`[Refund] Seat ${seatIndex} cleared for ${seat.userName}`);
-
-            // If host left, reassign or deactivate
-            if (seat.userId === game.hostId) {
-              const nextHuman = game.seats.find(s => s && !s.isBot);
-              if (nextHuman) {
-                game.hostId = nextHuman.userId;
-                console.log(`[Host] New host for ${gameId}: ${nextHuman.userName}`);
-              } else {
-                // No human players — deactivate
-                ringGames.delete(gameId);
-                pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId])
-                  .catch(err => console.error('[DB] Error deactivating game:', err.message));
-                console.log(`[Game] ${gameId} deactivated (no players)`);
-              }
-            }
-
-            broadcastTableState(gameId);
           } else {
             // ── Game was in progress — set auto-fold timeout ──
             if (game.currentHand) {

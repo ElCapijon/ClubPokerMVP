@@ -410,19 +410,40 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     });
   }, [clubId, addNotification]);
 
-  const handleAddBots = useCallback(() => {
-    getSocket().emit('add_bots', { gameId: clubId }, (err, data) => {
-      if (err) addNotification(err.error || 'Failed to add bots', 'error');
-      else addNotification(`🤖 Added ${data.botsAdded} bots to the table!`, 'success');
-    });
-  }, [clubId, addNotification]);
+  const leavingRef = useRef(false);
 
-  const handleRemoveBots = useCallback(() => {
-    getSocket().emit('remove_bots', { gameId: clubId }, (err, data) => {
-      if (err) addNotification(err.error || 'Failed to remove bots', 'error');
-      else addNotification(`Removed ${data.botsRemoved} bots`, 'info');
+  const handleLeaveTable = useCallback(() => {
+    if (leavingRef.current) return; // Prevent double-click
+    leavingRef.current = true;
+
+    const socket = getSocket();
+    if (!socket) {
+      // Socket already gone — just navigate
+      onLeave();
+      return;
+    }
+
+    // Always use leave_ring_game to properly refund/cash out before navigating
+    // This works for both WAITING (refunds full stack) and active games (cashes out)
+    //
+    // Safety fallback: if the server doesn't respond within 5s, force-leave anyway
+    const fallbackTimer = setTimeout(() => {
+      onLeave();
+    }, 5000);
+
+    socket.emit('leave_ring_game', { gameId: clubId }, (err, data) => {
+      clearTimeout(fallbackTimer);
+      if (err) {
+        // Even if leave fails, navigate away — don't trap the user
+        addNotification(err.error || 'Failed to cash out', 'error');
+        onLeave();
+        return;
+      }
+      // Successfully refunded/cashed out — navigate to lobby
+      addNotification(`💵 Refunded ${data.cashOutAmount} chips`, 'success');
+      onLeave();
     });
-  }, [clubId, addNotification]);
+  }, [clubId, addNotification, onLeave]);
 
   // ─── Derived state ────────────────────────────────────────
   const isMyTurn = currentPlayerSeatIndex === mySeatIndex
@@ -575,7 +596,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       {/* ── Header Bar ── */}
       <header className="bg-gray-900/80 backdrop-blur-sm border-b border-gray-800 px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <button onClick={onLeave}
+          <button onClick={handleLeaveTable}
             className="text-gray-400 hover:text-white transition-colors p-1.5 -ml-1.5 shrink-0"
             title="Leave Table">
             <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -747,7 +768,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     {/* Name */}
                     <p className="text-[10px] sm:text-xs font-semibold text-white truncate max-w-[90px] sm:max-w-[110px] flex items-center justify-center gap-0.5">
                       {player.userName}
-                      {player.isBot && <span className="text-purple-400 text-[8px]">BOT</span>}
                       {player.isHost && !isMe && <span className="text-yellow-400 text-[10px]">★</span>}
                     </p>
 
@@ -883,19 +903,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                         className="btn-primary px-4 py-2 text-xs">
                         Start Game
                       </button>
-                      <button onClick={handleAddBots}
-                        className="px-4 py-2 rounded-xl text-xs font-semibold transition-all active:scale-95
-                                   bg-gradient-to-r from-purple-600 to-purple-500 text-white shadow-lg shadow-purple-600/20
-                                   hover:from-purple-500 hover:to-purple-400">
-                        🤖 Fill Bots
-                      </button>
-                      {players.some(p => p?.isBot) && (
-                        <button onClick={handleRemoveBots}
-                          className="px-4 py-2 rounded-xl text-xs font-semibold transition-all active:scale-95
-                                     bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white">
-                          Remove Bots
-                        </button>
-                      )}
                     </>
                   )}
                 </>
