@@ -197,7 +197,13 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
       setHandCount(data.handCount ?? 0);
       setActionTimeRemaining(data.actionTimeRemaining ?? 0);
       setActionTimerTotal(data.actionTimerTotal ?? 20);
-      if (data.gameStatus) setGameState(data.gameStatus);
+      if (data.gameStatus) {
+        // Clear hand result when a new hand starts
+        if (data.gameStatus === 'PREFLOP') {
+          setHandResult(null);
+        }
+        setGameState(data.gameStatus);
+      }
 
       if (data.players) {
         setPlayers(prev => {
@@ -287,8 +293,6 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
           return updated;
         });
       }
-
-      setTimeout(() => setHandResult(null), 5000);
     };
 
     const onLastAction = (data) => setLastAction(data);

@@ -279,7 +279,7 @@ function processBotAction(clubId) {
         broadcastGameState(clubId);
         setActionTimer(clubId);
       }
-    }, 3000);
+    }, 12000);
   } else {
     // Schedule next bot action or set timer for human
     setActionTimer(clubId);
@@ -375,7 +375,7 @@ function setActionTimer(clubId) {
           broadcastGameState(clubId);
           setActionTimer(clubId);
         }
-      }, 5000);
+      }, 12000);
     } else {
       // Set timer for the next player
       setActionTimer(clubId);
@@ -724,7 +724,7 @@ io.on('connection', (socket) => {
           console.error('[DB] Hand history error:', dbErr.message);
         }
 
-        // Schedule next hand after 5 seconds
+        // Schedule next hand after 12 seconds (time for players to see showdown)
         setTimeout(() => {
           const nextHandCount = (handCounters.get(clubId) || 0) + 1;
           const nextHand = createHand(club, nextHandCount);
@@ -737,7 +737,7 @@ io.on('connection', (socket) => {
             // Start timer for the new hand's first turn
             setActionTimer(clubId);
           }
-        }, 5000);
+        }, 12000);
       } else {
         // Set timer for the next player's turn
         setActionTimer(clubId);
