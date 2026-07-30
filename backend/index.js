@@ -1432,6 +1432,60 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ---------- REFUND BUY-IN (manual recovery) ----------
+  socket.on('refund_buyin', async ({ gameId }, callback) => {
+    try {
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo) {
+        return callback && callback({ error: 'Not at a table' });
+      }
+
+      const game = ringGames.get(gameId || playerInfo.gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
+      }
+
+      const seat = game.seats[playerInfo.seatIndex];
+      if (!seat || seat.userId !== socket.userId) {
+        return callback && callback({ error: 'Not seated at this table' });
+      }
+
+      if (game.gameState !== 'WAITING') {
+        return callback && callback({ error: 'Game already started, use Cash Out instead' });
+      }
+
+      const refundAmount = seat.stack || 0;
+      if (refundAmount <= 0) {
+        return callback && callback({ error: 'Nothing to refund' });
+      }
+
+      const newBankroll = await addToBankroll(socket.userId, refundAmount);
+
+      // Update session
+      if (seat.sessionId) {
+        pool.query(
+          'UPDATE player_sessions SET current_stack = $1, left_at = NOW() WHERE id = $2',
+          [0, seat.sessionId]
+        ).catch(err => console.error('[DB] Error:', err.message));
+      }
+
+      // Clear seat
+      game.seats[playerInfo.seatIndex] = null;
+      socket.leave(gameRoom(game.id));
+      socketToPlayer.delete(socket.id);
+
+      console.log(`[Refund-Manual] ${seat.userName} manually refunded ${refundAmount} chips`);
+
+      notifyBankroll(socket.userId, newBankroll);
+      broadcastTableState(game.id);
+
+      callback && callback(null, { refundAmount, bankroll: newBankroll });
+    } catch (err) {
+      console.error('[Refund Error]', err);
+      callback && callback({ error: 'Refund failed' });
+    }
+  });
+
   // ---------- SIT OUT ----------
   socket.on('player_sit_out', ({ gameId }, callback) => {
     try {
@@ -1476,44 +1530,92 @@ io.on('connection', (socket) => {
         const seat = game.seats[seatIndex];
         if (seat && seat.userId === userId) {
           seat.isConnected = false;
-          console.log(`[Disconnect] ${seat.userName} disconnected from game ${gameId}`);
+          console.log(`[Disconnect] ${seat.userName} disconnected from game ${gameId} (state: ${game.gameState})`);
 
-          if (game.currentHand && game.gameState !== 'WAITING') {
-            const timeoutKey = `${gameId}:${userId}`;
-
-            if (disconnectTimeouts.has(timeoutKey)) {
-              clearTimeout(disconnectTimeouts.get(timeoutKey));
+          // ── REFUND SAFETY NET ──────────────────────────────────
+          // If the game NEVER started (WAITING), refund the player's buy-in
+          // and free their seat. Prevents lost chips from crashes.
+          if (game.gameState === 'WAITING') {
+            const refundAmount = seat.stack || 0;
+            if (refundAmount > 0 && !userId.startsWith('bot_')) {
+              (async () => {
+                try {
+                  const newBankroll = await addToBankroll(userId, refundAmount);
+                  console.log(`[Refund] ${seat.userName} refunded ${refundAmount} chips (game never started). New bankroll: ${newBankroll}`);
+                  notifyBankroll(userId, newBankroll);
+                } catch (refundErr) {
+                  console.error('[Refund] Failed to refund:', refundErr.message);
+                }
+              })();
             }
 
-            const disconnectTimeout = setTimeout(() => {
-              const hand = game.currentHand;
-              if (hand && hand.gameStatus !== 'WAITING' && hand.gameStatus !== GAME_STATES.SHOWDOWN && hand.gameStatus !== GAME_STATES.HAND_COMPLETE) {
-                const playerInHand = hand.players.find(p => p.seatIndex === seatIndex);
-                if (playerInHand && !playerInHand.isFolded && !playerInHand.isAllIn) {
-                  clearActionTimer(gameId);
-                  const result = handleAction(hand, seatIndex, 'fold');
-                  if (!result.error) {
-                    console.log(`[Auto-Fold] ${seat.userName} folded due to disconnect timeout`);
-                    if (seat) seat.isSittingOut = true;
-                    game.gameState = hand.gameStatus;
-                    for (const hp of hand.players) {
-                      const s = game.seats[hp.seatIndex];
-                      if (s) s.stack = hp.stack;
-                    }
-                    broadcastGameState(gameId);
-                    if (!isHandComplete(hand)) {
-                      setActionTimer(gameId);
+            // Update player session
+            if (seat.sessionId) {
+              pool.query(
+                'UPDATE player_sessions SET current_stack = $1, left_at = NOW() WHERE id = $2',
+                [0, seat.sessionId]
+              ).catch(err => console.error('[DB] Error updating session:', err.message));
+            }
+
+            // Clear the seat
+            game.seats[seatIndex] = null;
+            console.log(`[Refund] Seat ${seatIndex} cleared for ${seat.userName}`);
+
+            // If host left, reassign or deactivate
+            if (seat.userId === game.hostId) {
+              const nextHuman = game.seats.find(s => s && !s.isBot);
+              if (nextHuman) {
+                game.hostId = nextHuman.userId;
+                console.log(`[Host] New host for ${gameId}: ${nextHuman.userName}`);
+              } else {
+                // No human players — deactivate
+                ringGames.delete(gameId);
+                pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId])
+                  .catch(err => console.error('[DB] Error deactivating game:', err.message));
+                console.log(`[Game] ${gameId} deactivated (no players)`);
+              }
+            }
+
+            broadcastTableState(gameId);
+          } else {
+            // ── Game was in progress — set auto-fold timeout ──
+            if (game.currentHand) {
+              const timeoutKey = `${gameId}:${userId}`;
+
+              if (disconnectTimeouts.has(timeoutKey)) {
+                clearTimeout(disconnectTimeouts.get(timeoutKey));
+              }
+
+              const disconnectTimeout = setTimeout(() => {
+                const hand = game.currentHand;
+                if (hand && hand.gameStatus !== 'WAITING' && hand.gameStatus !== GAME_STATES.SHOWDOWN && hand.gameStatus !== GAME_STATES.HAND_COMPLETE) {
+                  const playerInHand = hand.players.find(p => p.seatIndex === seatIndex);
+                  if (playerInHand && !playerInHand.isFolded && !playerInHand.isAllIn) {
+                    clearActionTimer(gameId);
+                    const result = handleAction(hand, seatIndex, 'fold');
+                    if (!result.error) {
+                      console.log(`[Auto-Fold] ${seat.userName} folded due to disconnect timeout`);
+                      if (seat) seat.isSittingOut = true;
+                      game.gameState = hand.gameStatus;
+                      for (const hp of hand.players) {
+                        const s = game.seats[hp.seatIndex];
+                        if (s) s.stack = hp.stack;
+                      }
+                      broadcastGameState(gameId);
+                      if (!isHandComplete(hand)) {
+                        setActionTimer(gameId);
+                      }
                     }
                   }
                 }
-              }
-              disconnectTimeouts.delete(timeoutKey);
-            }, 60000);
+                disconnectTimeouts.delete(timeoutKey);
+              }, 60000);
 
-            disconnectTimeouts.set(timeoutKey, disconnectTimeout);
+              disconnectTimeouts.set(timeoutKey, disconnectTimeout);
+            }
+
+            broadcastTableState(gameId);
           }
-
-          broadcastTableState(gameId);
         }
       }
 
