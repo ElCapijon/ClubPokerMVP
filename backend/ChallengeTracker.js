@@ -1,8 +1,9 @@
 // ============================================================
-// ChallengeTracker.js - Non-blocking challenge/quest tracking
+// ChallengeTracker.js - Stat-driven challenge/quest tracking
 //
-// Maintains an in-memory progress cache and asynchronously
-// flushes updates to the database. Never blocks the game loop.
+// Single trackStat(userId, statName, amount) function replaces
+// all custom hooks. Quests are milestone targets on stat names.
+// In-memory cache with async DB flush — never blocks game loop.
 // ============================================================
 
 const db = require('./db');
@@ -12,14 +13,17 @@ const db = require('./db');
 const progressCache = new Map();
 
 // Cached challenge definitions (loaded once at server start)
-// Array of { id, category, name, description, target_value, target_rank, reward_badge }
+// Array of { id, stat, name, description, target_value, reward_badge }
 let definitionsCache = [];
+
+// Index definitions by stat name for O(1) lookup
+// Map<statName, Array<definition>>
+let definitionsByStat = new Map();
 
 // io instance for real-time socket notifications
 let ioInstance = null;
 
 // Map<userId, socketId> for looking up connected sockets by userId
-// (passed from index.js where it's maintained)
 let userIdToSocket = null;
 
 // Batch flush interval handle
@@ -29,9 +33,8 @@ let flushIntervalHandle = null;
 
 /**
  * Initialize the tracker: load challenge definitions and start batch flush timer.
- * Must be called once at server start with the Socket.io instance.
  * @param {Object} io - Socket.io server instance
- * @param {Map<string, string>} userSocketMap - Map<userId, socketId> for real-time notifications
+ * @param {Map<string, string>} userSocketMap - Map<userId, socketId>
  */
 async function init(io, userSocketMap) {
   ioInstance = io;
@@ -40,113 +43,89 @@ async function init(io, userSocketMap) {
   try {
     const result = await db.query('SELECT * FROM challenge_definitions ORDER BY id');
     definitionsCache = result.rows;
-    console.log(`[Challenges] Loaded ${definitionsCache.length} challenge definitions`);
+    // Build index by stat name
+    definitionsByStat = new Map();
+    for (const def of definitionsCache) {
+      const stat = def.stat;
+      if (!definitionsByStat.has(stat)) {
+        definitionsByStat.set(stat, []);
+      }
+      definitionsByStat.get(stat).push(def);
+    }
+    console.log(`[Challenges] Loaded ${definitionsCache.length} definitions across ${definitionsByStat.size} stats`);
   } catch (err) {
     console.error('[Challenges] Failed to load definitions:', err.message);
     definitionsCache = [];
+    definitionsByStat = new Map();
   }
 
   // Flush dirty progress to DB every 15 seconds
   flushIntervalHandle = setInterval(() => flushAll(), 15000);
-
   console.log('[Challenges] Tracker initialized with 15s batch flush interval');
 }
 
 /**
- * Shutdown the tracker (clear interval).
+ * Shutdown the tracker (clear interval, flush remaining).
  */
 function shutdown() {
   if (flushIntervalHandle) {
     clearInterval(flushIntervalHandle);
     flushIntervalHandle = null;
   }
-  // One final flush
   flushAll();
 }
 
-// ─── Hook Handlers ────────────────────────────────────────
+// ─── Core Stat Tracking ───────────────────────────────────
 
 /**
- * Track that a player made a hand of a given rank at showdown.
+ * Increment a stat counter for a user. Looks up all challenge
+ * definitions matching this stat name and advances progress.
+ *
  * @param {string} userId
- * @param {number} rank - Hand rank (1-9, see HandEvaluator)
+ * @param {string} statName - e.g., 'handsPlayed', 'handsWon', 'flushMade'
+ * @param {number} [amount=1] - How much to increment by
  */
-function trackHandRank(userId, rank) {
-  if (!userId || !rank) return;
+function trackStat(userId, statName, amount = 1) {
+  if (!userId || !statName) return;
+  if (amount <= 0) return;
 
-  const applicable = definitionsCache.filter(
-    d => d.category === 'hand_rank' && d.target_rank === rank
-  );
+  const applicable = definitionsByStat.get(statName);
+  if (!applicable || applicable.length === 0) return;
 
   for (const def of applicable) {
-    incrementProgress(userId, def);
-  }
-}
+    if (!progressCache.has(userId)) {
+      progressCache.set(userId, new Map());
+    }
 
-/**
- * Track that a player was dealt into a hand (volume).
- * @param {string} userId
- */
-function trackVolume(userId) {
-  if (!userId) return;
+    const userMap = progressCache.get(userId);
+    const current = userMap.get(def.id)?.progress || 0;
 
-  const applicable = definitionsCache.filter(d => d.category === 'volume');
+    // Don't increment past target
+    const newProgress = Math.min(current + amount, def.target_value);
+    const wasCompleted = current >= def.target_value;
+    const nowCompleted = newProgress >= def.target_value;
 
-  for (const def of applicable) {
-    incrementProgress(userId, def);
-  }
-}
+    userMap.set(def.id, {
+      progress: newProgress,
+      isCompleted: nowCompleted,
+      dirty: true,
+    });
 
-/**
- * Track a wagering event (e.g., blind steal).
- * @param {string} userId
- */
-function trackWagering(userId) {
-  if (!userId) return;
+    // Emit real-time notification on first completion
+    if (nowCompleted && !wasCompleted && ioInstance && userIdToSocket) {
+      const completionData = {
+        challengeId: def.id,
+        name: def.name,
+        description: def.description,
+        stat: def.stat,
+        badge: def.reward_badge || '⭐',
+      };
 
-  const applicable = definitionsCache.filter(d => d.category === 'wagering');
-
-  for (const def of applicable) {
-    incrementProgress(userId, def);
-  }
-}
-
-// ─── Core Increment Logic ─────────────────────────────────
-
-function incrementProgress(userId, definition) {
-  if (!progressCache.has(userId)) {
-    progressCache.set(userId, new Map());
-  }
-
-  const userMap = progressCache.get(userId);
-  const current = userMap.get(definition.id)?.progress || 0;
-
-  // Don't increment past target
-  const newProgress = Math.min(current + 1, definition.target_value);
-  const wasCompleted = current >= definition.target_value;
-  const nowCompleted = newProgress >= definition.target_value;
-
-  userMap.set(definition.id, {
-    progress: newProgress,
-    isCompleted: nowCompleted,
-    dirty: true,
-  });
-
-  // Emit real-time notification on first completion
-  if (nowCompleted && !wasCompleted && ioInstance && userIdToSocket) {
-    const completionData = {
-      challengeId: definition.id,
-      name: definition.name,
-      description: definition.description,
-      category: definition.category,
-      badge: definition.reward_badge || '⭐',
-    };
-
-    // Look up the user's socket by userId (not room name!)
-    const socketId = userIdToSocket.get(userId);
-    if (socketId) {
-      ioInstance.to(socketId).emit('challenge_completed', completionData);
-      console.log(`[Challenges] User ${userId} completed: ${definition.name}`);
+      const socketId = userIdToSocket.get(userId);
+      if (socketId) {
+        ioInstance.to(socketId).emit('challenge_completed', completionData);
+        console.log(`[Challenges] User ${userId} completed: ${def.name} (${statName})`);
+      }
     }
   }
 }
@@ -155,6 +134,7 @@ function incrementProgress(userId, definition) {
 
 /**
  * Get aggregated progress for a user (definitions + progress).
+ * Returns an array sorted by stat/name.
  */
 async function getUserProgress(userId) {
   const result = await db.query(
@@ -167,11 +147,10 @@ async function getUserProgress(userId) {
 
   return result.rows.map(row => ({
     id: row.id,
-    category: row.category,
+    stat: row.stat,
     name: row.name,
     description: row.description,
     targetValue: row.target_value,
-    targetRank: row.target_rank,
     rewardBadge: row.reward_badge || '⭐',
     progress: row.progress || 0,
     isCompleted: row.is_completed || false,
@@ -181,9 +160,6 @@ async function getUserProgress(userId) {
 
 // ─── Batch Database Flush ─────────────────────────────────
 
-/**
- * Flush all dirty progress for a specific user to the database.
- */
 async function flushUser(userId) {
   const userProgress = progressCache.get(userId);
   if (!userProgress) return;
@@ -211,9 +187,6 @@ async function flushUser(userId) {
   }
 }
 
-/**
- * Flush all dirty progress for all users.
- */
 async function flushAll() {
   const dirtyUsers = [];
   for (const [userId, userMap] of progressCache) {
@@ -234,8 +207,6 @@ async function flushAll() {
 module.exports = {
   init,
   shutdown,
-  trackHandRank,
-  trackVolume,
-  trackWagering,
+  trackStat,
   getUserProgress,
 };

@@ -12,6 +12,18 @@ const { getNextBotName, resetBotNames, decideAction } = require('./botPlayer');
 const ChallengeTracker = require('./ChallengeTracker');
 const pool = require('./db');
 
+// Map rank number to stat name for hand rank tracking
+const RANK_STATS = {
+  2: 'pairMade',
+  3: 'twoPairMade',
+  4: 'threeOfAKindMade',
+  5: 'straightMade',
+  6: 'flushMade',
+  7: 'fullHouseMade',
+  8: 'fourOfAKindMade',
+  9: 'straightFlushMade',
+};
+
 // ============================================================
 // Configuration
 // ============================================================
@@ -432,14 +444,7 @@ function processBotAction(clubId) {
   // If hand is complete, schedule next hand
   if (isHandComplete(hand)) {
     // Challenge tracking (non-blocking, fire-and-forget)
-    if (hand.winningUserId && !hand.winningUserId.startsWith('bot_')) {
-      ChallengeTracker.trackHandRank(hand.winningUserId, hand.winningRank);
-    }
-    hand.players.forEach(p => {
-      if (p.userId && !p.userId.startsWith('bot_')) {
-        ChallengeTracker.trackVolume(p.userId);
-      }
-    });
+    trackHandComplete(hand);
     lastActions.delete(clubId);
     io.to(clubRoom(clubId)).emit('hand_complete', {
       handResult: hand.handResult,
@@ -536,14 +541,7 @@ function setActionTimer(clubId) {
     // If hand is complete, broadcast results and schedule next hand
     if (isHandComplete(handNow)) {
       // Challenge tracking (non-blocking, fire-and-forget)
-      if (handNow.winningUserId && !handNow.winningUserId.startsWith('bot_')) {
-        ChallengeTracker.trackHandRank(handNow.winningUserId, handNow.winningRank);
-      }
-      handNow.players.forEach(p => {
-        if (p.userId && !p.userId.startsWith('bot_')) {
-          ChallengeTracker.trackVolume(p.userId);
-        }
-      });
+      trackHandComplete(handNow);
       io.to(clubRoom(clubId)).emit('hand_complete', {
         handResult: handNow.handResult,
         communityCards: handNow.communityCards,
@@ -611,6 +609,53 @@ function checkAutoStart(clubId) {
 
   broadcastGameState(clubId);
   setActionTimer(clubId);
+}
+
+/**
+ * Track all challenge stats when a hand completes.
+ * Called from all three hand-complete paths (bot, auto-fold, player action).
+ */
+function trackHandComplete(hand) {
+  if (!hand) return;
+
+  // Hands played — for every non-bot player dealt in
+  hand.players.forEach(p => {
+    if (p.userId && !p.userId.startsWith('bot_')) {
+      ChallengeTracker.trackStat(p.userId, 'handsPlayed', 1);
+    }
+  });
+
+  // Winner-specific tracking
+  if (hand.winningUserId && !hand.winningUserId.startsWith('bot_')) {
+    ChallengeTracker.trackStat(hand.winningUserId, 'handsWon', 1);
+
+    // Showdown (uncontested wins don't count as showdown wins)
+    if (hand.winningRank > 0) {
+      ChallengeTracker.trackStat(hand.winningUserId, 'showdownsWon', 1);
+    }
+
+    // Hand rank tracking (rank 0 = uncontested)
+    if (hand.winningRank >= 2 && hand.winningRank <= 9) {
+      const statName = RANK_STATS[hand.winningRank];
+      if (statName) {
+        ChallengeTracker.trackStat(hand.winningUserId, statName, 1);
+      }
+      // Royal flush shares rank 9 with straight flush — track both
+      if (hand.winningRank === 9) {
+        ChallengeTracker.trackStat(hand.winningUserId, 'royalFlushMade', 1);
+      }
+    }
+  }
+
+  // Showdowns reached — for all non-folded non-bot players at showdown
+  if (hand.gameStatus === 'SHOWDOWN' || hand.gameStatus === 'HAND_COMPLETE') {
+    const activePlayers = hand.players.filter(p => !p.isFolded);
+    activePlayers.forEach(p => {
+      if (p.userId && !p.userId.startsWith('bot_')) {
+        ChallengeTracker.trackStat(p.userId, 'showdownsReached', 1);
+      }
+    });
+  }
 }
 
 /** Record and broadcast the last action */
@@ -865,6 +910,41 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
       // Record the last action for display
       recordAction(clubId, playerInfo.seatIndex, action, amount);
 
+      // Track action stats (non-blocking, fire-and-forget)
+      const actingUserId = club.currentHand.players.find(p => p.seatIndex === playerInfo.seatIndex)?.userId;
+      if (actingUserId && !actingUserId.startsWith('bot_')) {
+        const actionStatMap = { fold: 'foldsMade', call: 'callsMade', raise: 'raisesMade', bet: 'betsMade' };
+        const statName = actionStatMap[action];
+        if (statName) {
+          ChallengeTracker.trackStat(actingUserId, statName, 1);
+        }
+        // Check if player went all-in with this action
+        const player = club.currentHand.players.find(p => p.seatIndex === playerInfo.seatIndex);
+        if (player && player.isAllIn) {
+          ChallengeTracker.trackStat(actingUserId, 'allInsMade', 1);
+        }
+      }
+
+      // Track street advances (for all non-folded players who saw the new street)
+      if (club.currentHand && (club.currentHand.gameStatus === 'FLOP' || club.currentHand.gameStatus === 'TURN' || club.currentHand.gameStatus === 'RIVER')) {
+        // Check if this is a new street (the previous gameState was the prior street)
+        const prevStatus = club.gameState;
+        const newStatus = club.currentHand.gameStatus;
+        const streetStat = {
+          'FLOP': 'flopsSeen',
+          'TURN': 'turnsSeen',
+          'RIVER': 'riversSeen',
+        }[newStatus];
+        if (streetStat && prevStatus !== newStatus) {
+          const activePlayers = club.currentHand.players.filter(p => !p.isFolded && !p.isAllIn);
+          activePlayers.forEach(p => {
+            if (p.userId && !p.userId.startsWith('bot_')) {
+              ChallengeTracker.trackStat(p.userId, streetStat, 1);
+            }
+          });
+        }
+      }
+
       // Update club game state
       club.gameState = club.currentHand.gameStatus;
 
@@ -887,27 +967,7 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
         const hand = club.currentHand;
 
         // Challenge tracking (non-blocking, fire-and-forget)
-        if (hand.winningUserId && !hand.winningUserId.startsWith('bot_')) {
-          ChallengeTracker.trackHandRank(hand.winningUserId, hand.winningRank);
-        }
-        hand.players.forEach(p => {
-          if (p.userId && !p.userId.startsWith('bot_')) {
-            ChallengeTracker.trackVolume(p.userId);
-          }
-        });
-
-        // Blind Stealer: pre-flop raise that makes everyone fold
-        if (hand.gameStatus === 'PREFLOP' && hand.winningRank === 0 && hand.winningUserId) {
-          // The last raiser is the one who stole the blinds
-          const raiserSeatIndex = hand.lastRaiserIndex >= 0 ? hand.players[hand.lastRaiserIndex]?.seatIndex : -1;
-          if (raiserSeatIndex >= 0) {
-            const raiser = hand.players.find(p => p.seatIndex === raiserSeatIndex);
-            if (raiser && raiser.userId && !raiser.userId.startsWith('bot_')) {
-              ChallengeTracker.trackWagering(raiser.userId);
-            }
-          }
-        }
-
+        trackHandComplete(hand);
         lastActions.delete(clubId);
 
         io.to(clubRoom(clubId)).emit('hand_complete', {

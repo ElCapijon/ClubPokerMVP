@@ -36,16 +36,19 @@ function CompletionToast({ challenge, onDismiss }) {
 
 // ─── Quest Card ─────────────────────────────────────────────
 function QuestCard({ quest }) {
-  const { name, description, targetValue, progress, isCompleted, rewardBadge, category } = quest;
+  const { name, description, targetValue, progress, isCompleted, rewardBadge, stat } = quest;
   const pct = Math.min(100, Math.round((progress / targetValue) * 100));
   const progressLabel = isCompleted ? '✓' : `${progress}/${targetValue}`;
 
-  // Color coding by category
-  const categoryColor =
-    category === 'hand_rank' ? 'from-blue-600 to-blue-500' :
-    category === 'volume'    ? 'from-green-600 to-green-500' :
-    category === 'wagering'  ? 'from-purple-600 to-purple-500' :
-                               'from-gray-600 to-gray-500';
+  // Color coding by stat group (case-sensitive — stat names are camelCase)
+  const statColor =
+    stat === 'handsPlayed' ? 'from-blue-600 to-blue-500' :
+    stat === 'handsWon' || stat.startsWith('showdown') ? 'from-green-600 to-green-500' :
+    stat.endsWith('Seen') ? 'from-cyan-600 to-cyan-500' :
+    stat === 'foldsMade' || stat === 'callsMade' ? 'from-gray-600 to-gray-500' :
+    stat === 'raisesMade' || stat === 'betsMade' || stat === 'allInsMade' ? 'from-purple-600 to-purple-500' :
+    stat.endsWith('Made') ? 'from-amber-600 to-amber-500' :
+    'from-gray-600 to-gray-500';
 
   return (
     <div className={`relative overflow-hidden rounded-xl border transition-all duration-300 ${
@@ -76,7 +79,7 @@ function QuestCard({ quest }) {
         {/* Progress Bar */}
         <div className="w-full h-2 bg-gray-700/50 rounded-full overflow-hidden">
           <div
-            className={`h-full rounded-full transition-all duration-700 ease-out bg-gradient-to-r ${categoryColor} ${
+            className={`h-full rounded-full transition-all duration-700 ease-out bg-gradient-to-r ${statColor} ${
               isCompleted ? 'animate-pulse' : ''
             }`}
             style={{ width: `${pct}%` }}
@@ -170,23 +173,34 @@ export default function QuestPanel() {
   const completedQuests = quests.filter(q => q.isCompleted).length;
 
   // Categorize
-  const byCategory = (cat) => quests.filter(q => q.category === cat);
-  const handRankQuests = byCategory('hand_rank');
-  const volumeQuests = byCategory('volume');
-  const wageringQuests = byCategory('wagering');
+  // Group quests by stat name, sort by group size (largest first)
+  const byStat = {};
+  for (const q of quests) {
+    if (!byStat[q.stat]) byStat[q.stat] = [];
+    byStat[q.stat].push(q);
+  }
+  const sortedStats = Object.keys(byStat).sort((a, b) => byStat[b].length - byStat[a].length);
 
-  const categoryIcon = (cat) => {
-    if (cat === 'hand_rank') return '♠️';
-    if (cat === 'volume') return '🔄';
-    if (cat === 'wagering') return '💰';
-    return '📋';
+  const statIcon = (stat) => {
+    if (stat === 'handsPlayed' || stat === 'handsWon') return '🃏';
+    if (stat.includes('Flop') || stat.includes('Turn') || stat.includes('River')) return '🃏';
+    if (stat.includes('Showdown')) return '⚔️';
+    if (stat.includes('Fold')) return '🛡️';
+    if (stat.includes('Call')) return '📞';
+    if (stat.includes('Raise') || stat.includes('Bet')) return '📈';
+    if (stat.includes('AllIn')) return '💀';
+    if (stat.includes('Pair') || stat.includes('TwoPair')) return '🎲';
+    if (stat.includes('Three') || stat.includes('Trips')) return '🎲';
+    if (stat.includes('Straight') && !stat.includes('Flush')) return '📏';
+    if (stat.includes('Flush') || stat.includes('FullHouse')) return '🌊';
+    if (stat.includes('Four') || stat.includes('Quads')) return '💎';
+    if (stat.includes('Royal')) return '👑';
+    return '⭐';
   };
 
-  const categoryLabel = (cat) => {
-    if (cat === 'hand_rank') return 'Hand Ranks';
-    if (cat === 'volume') return 'Volume';
-    if (cat === 'wagering') return 'Wagering';
-    return cat;
+  const statLabel = (stat) => {
+    // Convert camelCase to readable label
+    return stat.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
   };
 
   return (
@@ -265,47 +279,18 @@ export default function QuestPanel() {
 
               {!loading && (
                 <>
-                  {/* Hand Ranks */}
-                  {handRankQuests.length > 0 && (
-                    <div>
+                  {sortedStats.map(stat => (
+                    <div key={stat}>
                       <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                        <span>{categoryIcon('hand_rank')}</span> {categoryLabel('hand_rank')}
+                        <span>{statIcon(stat)}</span> {statLabel(stat)}
                       </h3>
                       <div className="space-y-2">
-                        {handRankQuests.map(q => (
+                        {byStat[stat].map(q => (
                           <QuestCard key={q.id} quest={q} />
                         ))}
                       </div>
                     </div>
-                  )}
-
-                  {/* Volume */}
-                  {volumeQuests.length > 0 && (
-                    <div>
-                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                        <span>{categoryIcon('volume')}</span> {categoryLabel('volume')}
-                      </h3>
-                      <div className="space-y-2">
-                        {volumeQuests.map(q => (
-                          <QuestCard key={q.id} quest={q} />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Wagering */}
-                  {wageringQuests.length > 0 && (
-                    <div>
-                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                        <span>{categoryIcon('wagering')}</span> {categoryLabel('wagering')}
-                      </h3>
-                      <div className="space-y-2">
-                        {wageringQuests.map(q => (
-                          <QuestCard key={q.id} quest={q} />
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  ))}
                 </>
               )}
             </div>

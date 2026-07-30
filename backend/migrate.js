@@ -6,6 +6,8 @@ async function migrate() {
     await client.query('BEGIN');
 
     // Drop old tables if they exist (for clean migration)
+    await client.query(`DROP TABLE IF EXISTS user_challenge_progress CASCADE;`);
+    await client.query(`DROP TABLE IF EXISTS challenge_definitions CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS challenges CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS hand_histories CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS clubs CASCADE;`);
@@ -68,15 +70,14 @@ async function migrate() {
       );
     `);
 
-    // Challenge Definitions (static quest catalog)
+    // Challenge Definitions — stat-driven milestone system
     await client.query(`
       CREATE TABLE challenge_definitions (
         id SERIAL PRIMARY KEY,
-        category VARCHAR(20) NOT NULL,
+        stat VARCHAR(40) NOT NULL,
         name VARCHAR(50) NOT NULL,
         description VARCHAR(100) NOT NULL,
         target_value INTEGER NOT NULL,
-        target_rank INTEGER,
         reward_badge VARCHAR(30),
         created_at TIMESTAMP DEFAULT NOW()
       );
@@ -95,25 +96,131 @@ async function migrate() {
       );
     `);
 
-    // Seed challenge definitions
-    await client.query(`
-      INSERT INTO challenge_definitions (category, name, description, target_value, target_rank, reward_badge) VALUES
-        ('hand_rank', 'Three of a Kind', 'Make a Three of a Kind at showdown', 1, 4, '🎲'),
-        ('hand_rank', 'Flush Master', 'Win a hand with a Flush or better', 3, 6, '🌊'),
-        ('hand_rank', 'Full House', 'Make a Full House at showdown', 1, 7, '🏠'),
-        ('hand_rank', 'Four of a Kind', 'Hit Four of a Kind at showdown', 1, 8, '💎'),
-        ('hand_rank', 'Straight Flush', 'Hit a Straight Flush', 1, 9, '🔥'),
-        ('hand_rank', 'Royal Dream', 'Hit a Royal Flush', 1, 9, '👑'),
-        ('wagering', 'Blind Stealer', 'Successfully steal the blinds pre-flop', 10, NULL, '🦊'),
-        ('volume', 'Grinder', 'Play 50 hands', 50, NULL, '⛏️'),
-        ('volume', 'High Roller', 'Play 200 hands', 200, NULL, '💰'),
-        ('volume', 'First Win', 'Win your first hand', 1, NULL, '🏆');
-    `);
+    // ─── Seed 70+ Milestone Quests ─────────────────────────
+    // Format: (stat, name, description, target_value, reward_badge)
+
+    // Hands Played (9 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('handsPlayed', 'Beginner', 'Play 10 hands', 10, '🌱'),
+      ('handsPlayed', 'Getting Started', 'Play 50 hands', 50, '⛏️'),
+      ('handsPlayed', 'Regular', 'Play 100 hands', 100, '⛏️'),
+      ('handsPlayed', 'Dedicated', 'Play 250 hands', 250, '💰'),
+      ('handsPlayed', 'Grinder', 'Play 500 hands', 500, '💰'),
+      ('handsPlayed', 'Veteran', 'Play 1,000 hands', 1000, '💎'),
+      ('handsPlayed', 'Iron Will', 'Play 2,500 hands', 2500, '💎'),
+      ('handsPlayed', 'Legend', 'Play 5,000 hands', 5000, '👑'),
+      ('handsPlayed', 'Immortal', 'Play 10,000 hands', 10000, '👑')
+    ;`);
+
+    // Hands Won (8 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('handsWon', 'First Blood', 'Win your first hand', 1, '🏆'),
+      ('handsWon', 'Double Digits', 'Win 10 hands', 10, '🏆'),
+      ('handsWon', 'Quarter Century', 'Win 25 hands', 25, '🏆'),
+      ('handsWon', 'Fifty Club', 'Win 50 hands', 50, '🏆'),
+      ('handsWon', 'Century Mark', 'Win 100 hands', 100, '🌟'),
+      ('handsWon', 'Serious Player', 'Win 250 hands', 250, '🌟'),
+      ('handsWon', 'Five Hundred', 'Win 500 hands', 500, '👑'),
+      ('handsWon', 'Millennium', 'Win 1,000 hands', 1000, '👑')
+    ;`);
+
+    // Flops Seen (6 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('flopsSeen', 'Flopper I', 'See 10 flops', 10, '🃏'),
+      ('flopsSeen', 'Flopper II', 'See 50 flops', 50, '🃏'),
+      ('flopsSeen', 'Flopper III', 'See 100 flops', 100, '🃏'),
+      ('flopsSeen', 'Flopper IV', 'See 250 flops', 250, '🃏'),
+      ('flopsSeen', 'Flopper V', 'See 500 flops', 500, '🃏'),
+      ('flopsSeen', 'Flopper VI', 'See 1,000 flops', 1000, '🃏')
+    ;`);
+
+    // Showdowns Reached (5 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('showdownsReached', 'Showdown I', 'Reach 10 showdowns', 10, '⚔️'),
+      ('showdownsReached', 'Showdown II', 'Reach 50 showdowns', 50, '⚔️'),
+      ('showdownsReached', 'Showdown III', 'Reach 100 showdowns', 100, '⚔️'),
+      ('showdownsReached', 'Showdown IV', 'Reach 250 showdowns', 250, '⚔️'),
+      ('showdownsReached', 'Showdown V', 'Reach 500 showdowns', 500, '⚔️')
+    ;`);
+
+    // Showdowns Won (5 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('showdownsWon', 'Showdown Winner I', 'Win 5 showdowns', 5, '🏅'),
+      ('showdownsWon', 'Showdown Winner II', 'Win 25 showdowns', 25, '🏅'),
+      ('showdownsWon', 'Showdown Winner III', 'Win 50 showdowns', 50, '🏅'),
+      ('showdownsWon', 'Showdown Winner IV', 'Win 100 showdowns', 100, '🏅'),
+      ('showdownsWon', 'Showdown Winner V', 'Win 250 showdowns', 250, '🏅')
+    ;`);
+
+    // Folds (5 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('foldsMade', 'Disciplined I', 'Fold 10 times', 10, '🛡️'),
+      ('foldsMade', 'Disciplined II', 'Fold 50 times', 50, '🛡️'),
+      ('foldsMade', 'Disciplined III', 'Fold 100 times', 100, '🛡️'),
+      ('foldsMade', 'Disciplined IV', 'Fold 250 times', 250, '🛡️'),
+      ('foldsMade', 'Disciplined V', 'Fold 500 times', 500, '🛡️')
+    ;`);
+
+    // Calls (5 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('callsMade', 'Caller I', 'Call 10 times', 10, '📞'),
+      ('callsMade', 'Caller II', 'Call 50 times', 50, '📞'),
+      ('callsMade', 'Caller III', 'Call 100 times', 100, '📞'),
+      ('callsMade', 'Caller IV', 'Call 250 times', 250, '📞'),
+      ('callsMade', 'Caller V', 'Call 500 times', 500, '📞')
+    ;`);
+
+    // Raises (5 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('raisesMade', 'Aggressor I', 'Raise 10 times', 10, '📈'),
+      ('raisesMade', 'Aggressor II', 'Raise 50 times', 50, '📈'),
+      ('raisesMade', 'Aggressor III', 'Raise 100 times', 100, '📈'),
+      ('raisesMade', 'Aggressor IV', 'Raise 250 times', 250, '📈'),
+      ('raisesMade', 'Aggressor V', 'Raise 500 times', 500, '📈')
+    ;`);
+
+    // All-Ins (5 milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('allInsMade', 'All-In I', 'Go all-in 5 times', 5, '💀'),
+      ('allInsMade', 'All-In II', 'Go all-in 10 times', 10, '💀'),
+      ('allInsMade', 'All-In III', 'Go all-in 25 times', 25, '💀'),
+      ('allInsMade', 'All-In IV', 'Go all-in 50 times', 50, '💀'),
+      ('allInsMade', 'All-In V', 'Go all-in 100 times', 100, '💀')
+    ;`);
+
+    // Hand Ranks (progressive milestones)
+    await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
+      ('pairMade', 'Pair I', 'Make a pair at showdown 1 time', 1, '🎲'),
+      ('pairMade', 'Pair II', 'Make a pair at showdown 10 times', 10, '🎲'),
+      ('pairMade', 'Pair III', 'Make a pair at showdown 50 times', 50, '🎲'),
+      ('twoPairMade', 'Two Pair I', 'Make two pair 1 time', 1, '🎲'),
+      ('twoPairMade', 'Two Pair II', 'Make two pair 10 times', 10, '🎲'),
+      ('twoPairMade', 'Two Pair III', 'Make two pair 25 times', 25, '🎲'),
+      ('threeOfAKindMade', 'Trips I', 'Make three of a kind 1 time', 1, '🎲'),
+      ('threeOfAKindMade', 'Trips II', 'Make three of a kind 5 times', 5, '🎲'),
+      ('threeOfAKindMade', 'Trips III', 'Make three of a kind 25 times', 25, '🎲'),
+      ('straightMade', 'Straight I', 'Make a straight 1 time', 1, '📏'),
+      ('straightMade', 'Straight II', 'Make a straight 5 times', 5, '📏'),
+      ('straightMade', 'Straight III', 'Make a straight 25 times', 25, '📏'),
+      ('flushMade', 'Flush I', 'Make a flush 1 time', 1, '🌊'),
+      ('flushMade', 'Flush II', 'Make a flush 5 times', 5, '🌊'),
+      ('flushMade', 'Flush III', 'Make a flush 25 times', 25, '🌊'),
+      ('fullHouseMade', 'Full House I', 'Make a full house 1 time', 1, '🏠'),
+      ('fullHouseMade', 'Full House II', 'Make a full house 5 times', 5, '🏠'),
+      ('fullHouseMade', 'Full House III', 'Make a full house 10 times', 10, '🏠'),
+      ('fourOfAKindMade', 'Quads I', 'Make four of a kind 1 time', 1, '💎'),
+      ('fourOfAKindMade', 'Quads II', 'Make four of a kind 3 times', 3, '💎'),
+      ('fourOfAKindMade', 'Quads III', 'Make four of a kind 10 times', 10, '💎'),
+      ('straightFlushMade', 'Straight Flush I', 'Make a straight flush 1 time', 1, '🔥'),
+      ('straightFlushMade', 'Straight Flush II', 'Make a straight flush 3 times', 3, '🔥'),
+      ('royalFlushMade', 'Royal Flush I', 'Make a royal flush 1 time', 1, '👑'),
+      ('royalFlushMade', 'Royal Flush II', 'Make a royal flush 3 times', 3, '👑')
+    ;`);
 
     await client.query('COMMIT');
     console.log('Migration completed successfully!');
     console.log('Tables created: users, clubs, hand_histories, challenges, challenge_definitions, user_challenge_progress');
-    console.log('Seed data: 10 challenge definitions inserted');
+    console.log('Seed data: 73 milestone challenge definitions inserted');
     return { tables: ['users', 'clubs', 'hand_histories', 'challenges', 'challenge_definitions', 'user_challenge_progress'] };
   } catch (err) {
     await client.query('ROLLBACK');
@@ -121,8 +228,6 @@ async function migrate() {
     throw err;
   } finally {
     client.release();
-    // Only close the pool when running as a standalone script
-    // When called from the API endpoint, the server needs the pool to stay open!
     if (require.main === module) {
       await pool.end();
     }
