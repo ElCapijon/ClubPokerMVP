@@ -246,9 +246,14 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
     onEnterClub({
       gameId: data.gameId,
       tableName: data.tableName,
+      smallBlind: data.smallBlind,
+      bigBlind: data.bigBlind,
       userId: data.userId,
       seatIndex: data.seatIndex,
       buyinAmount: data.buyinAmount,
+      initialPlayers: data.initialPlayers,
+      gameState: data.gameState,
+      hostId: data.hostId,
     }, displayName);
   }, [onEnterClub, displayName]);
 

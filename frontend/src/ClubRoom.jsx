@@ -122,10 +122,10 @@ function EmojiBubble({ emoji, userName }) {
 // MAIN COMPONENT
 // ====================================================================
 export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
-  const { gameId = clubData.clubId, tableName = 'Poker Table', userId, seatIndex: mySeatIndex, buyinAmount } = clubData;
-  const clubId = gameId; // Internal alias for game loop
-  const [players, setPlayers] = useState(Array(6).fill(null));
-  const [gameState, setGameState] = useState('WAITING');
+  const { gameId = clubData.clubId, tableName = 'Poker Table', userId, seatIndex: mySeatIndex, buyinAmount, initialPlayers } = clubData;
+  const clubId = gameId;
+  const [players, setPlayers] = useState(initialPlayers || Array(6).fill(null));
+  const [gameState, setGameState] = useState(clubData.gameState || 'WAITING');
   const [isConnected, setIsConnected] = useState(true);
   const [showCashOut, setShowCashOut] = useState(false);
   const [cashingOut, setCashingOut] = useState(false);
@@ -387,7 +387,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       if (err) addNotification(err.error || 'Rebuy failed', 'error');
       else addNotification(`Rebought ${buyin} chips!`, 'success');
     });
-  }, [clubId, clubData?.minBuyin, addNotification, myPlayerData?.stack]);
+  }, [clubId, clubData?.minBuyin, addNotification]);
 
   const handleCashOut = useCallback(() => {
     setCashingOut(true);

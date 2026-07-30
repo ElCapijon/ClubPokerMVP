@@ -905,15 +905,35 @@ io.on('connection', (socket) => {
 
       notifyBankroll(userId, newBankroll);
 
+      // Build the initial players array for the response
+      const initialPlayers = game.seats.map((seat, index) => {
+        if (!seat) return null;
+        return {
+          seatIndex: index,
+          userName: seat.userName,
+          stack: seat.stack,
+          isReady: seat.isReady,
+          isConnected: seat.isConnected,
+          isHost: seat.userId === game.hostId,
+          isSittingOut: seat.isSittingOut || false,
+          isBot: seat.isBot || false,
+        };
+      });
+
       callback(null, {
         gameId,
         tableName: game.tableName,
         stakeLevel,
+        smallBlind: game.tableSettings.sb,
+        bigBlind: game.tableSettings.bb,
         userId,
         seatIndex,
         buyinAmount: buyin,
         minBuyin: game.minBuyin,
         maxBuyin: game.maxBuyin,
+        initialPlayers,
+        gameState: game.gameState,
+        hostId: game.hostId,
       });
 
       broadcastTableState(gameId);
