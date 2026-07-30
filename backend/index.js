@@ -55,20 +55,14 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
-// Migration trigger — run database migration (restricted to host only in production)
+// Migration trigger — run database migration
+// In production, protected by MIGRATE_SECRET env var
 const { migrate } = require('./migrate');
 app.get('/api/migrate', async (req, res) => {
   if (isProduction) {
-    // In production, require JWT auth
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ error: 'Authentication required. Use a JWT token from your logged-in session.' });
-    }
-    try {
-      jwt.verify(token, JWT_SECRET);
-    } catch (err) {
-      return res.status(403).json({ error: 'Invalid token. Log in on the site first, then visit this endpoint.' });
+    const migrateSecret = process.env.MIGRATE_SECRET;
+    if (migrateSecret && req.query.secret !== migrateSecret) {
+      return res.status(403).json({ error: 'Forbidden. Set MIGRATE_SECRET on Render and pass ?secret=your_secret' });
     }
   }
   try {
