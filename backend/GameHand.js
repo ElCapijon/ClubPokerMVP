@@ -268,6 +268,10 @@ function goToShowdown(hand) {
   if (activePlayers.length <= 1) {
     // Everyone folded, last player wins
     const winner = activePlayers[0];
+    
+    // Award the pot to the winner's stack
+    winner.stack += hand.pot;
+    
     const results = [{
       potIndex: 0,
       potAmount: hand.pot,
@@ -310,28 +314,19 @@ function goToShowdown(hand) {
     }),
   }));
 
-  hand.handResult = mappedResults;
-  hand.gameStatus = GAME_STATES.HAND_COMPLETE;
-  return hand;
-}
-
-/**
- * Apply hand results back to the club seats.
- * Updates stacks and returns the club state.
- */
-function applyHandResults(clubState, hand) {
-  if (!hand.handResult) return clubState;
-
-  for (const pot of hand.handResult) {
+  // Award winnings to each player's stack
+  for (const pot of mappedResults) {
     for (const winner of pot.winners) {
-      const seat = clubState.seats[winner.seatIndex];
-      if (seat) {
-        seat.stack += winner.amountWon;
+      const hp = hand.players.find(p => p.seatIndex === winner.seatIndex);
+      if (hp) {
+        hp.stack += winner.amountWon;
       }
     }
   }
 
-  return clubState;
+  hand.handResult = mappedResults;
+  hand.gameStatus = GAME_STATES.HAND_COMPLETE;
+  return hand;
 }
 
 /**
@@ -569,7 +564,6 @@ module.exports = {
   isRoundComplete,
   advanceStreet,
   goToShowdown,
-  applyHandResults,
   isHandComplete,
   getPublicState,
   getPrivateState,
