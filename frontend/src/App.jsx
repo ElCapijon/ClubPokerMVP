@@ -36,21 +36,19 @@ function clearSession() {
 const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:3000');
 
 export default function App() {
-  const [view, setView] = useState('auth'); // 'auth' | 'lobby' | 'club' | 'reconnecting'
-  const [authView, setAuthView] = useState('login'); // 'login' | 'signup'
-  const [clubData, setClubData] = useState(null);
+  const [view, setView] = useState('auth');
+  const [authView, setAuthView] = useState('login');
+  const [gameData, setGameData] = useState(null);
   const [displayName, setDisplayName] = useState('');
   const [reconnectError, setReconnectError] = useState('');
 
-  // On mount: check for saved auth and auto-login
   useEffect(() => {
     const auth = loadAuth();
     if (auth && auth.token && auth.user) {
       setDisplayName(auth.user.displayName || '');
 
-      // Try to reconnect to any active club session
       const session = loadSession();
-      if (session && session.clubId && session.userId) {
+      if (session && session.gameId && session.userId) {
         attemptReconnect(session);
       } else {
         setView('lobby');
@@ -93,8 +91,8 @@ export default function App() {
       if (connectionTimedOut) return;
       socket.off('connect_error', onError);
 
-      socket.emit('rejoin_club', {
-        clubId: session.clubId,
+      socket.emit('rejoin_ring_game', {
+        gameId: session.gameId,
       }, (err, data) => {
         if (err) {
           console.log('[Reconnect] Session expired:', err.error);
@@ -107,7 +105,7 @@ export default function App() {
           }, 2000);
           return;
         }
-        setClubData(data);
+        setGameData(data);
         setDisplayName(getUser()?.displayName || '');
         setView('club');
       });
@@ -128,18 +126,16 @@ export default function App() {
 
     socket.once('connect', onConnect);
     socket.once('connect_error', onError);
-    // Socket is already connecting via connect() above
   }, []);
 
   const handleEnterClub = useCallback((data, name) => {
     saveSession({
-      clubId: data.clubId,
-      inviteCode: data.inviteCode,
+      gameId: data.gameId || data.clubId,
       userId: data.userId,
       seatIndex: data.seatIndex,
       displayName: name,
     });
-    setClubData(data);
+    setGameData(data);
     setDisplayName(name);
     setView('club');
   }, []);
@@ -147,17 +143,8 @@ export default function App() {
   const handleLeaveClub = useCallback(() => {
     clearSession();
     disconnect();
-    setClubData(null);
+    setGameData(null);
     setView('lobby');
-  }, []);
-
-  const handleLogout = useCallback(() => {
-    clearSession();
-    clearAuth();
-    disconnect();
-    setClubData(null);
-    setDisplayName('');
-    setView('auth');
   }, []);
 
   // ─── Auth Handlers ──────────────────────────────────────────
@@ -222,11 +209,11 @@ export default function App() {
   }
 
   // Club view
-  if (view === 'club' && clubData) {
+  if (view === 'club' && gameData) {
     return (
       <>
         <ClubRoom
-          clubData={clubData}
+          clubData={gameData}
           displayName={displayName}
           onLeave={handleLeaveClub}
           onLogout={handleLogout}
@@ -236,7 +223,7 @@ export default function App() {
     );
   }
 
-  // Lobby view (requires auth)
+  // Lobby view
   if (view === 'lobby') {
     return (
       <>

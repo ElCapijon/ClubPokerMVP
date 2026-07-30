@@ -6,7 +6,6 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { generateInviteCode } = require('./InviteCode');
 const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction } = require('./GameHand');
 const { getNextBotName, resetBotNames, decideAction } = require('./botPlayer');
 const ChallengeTracker = require('./ChallengeTracker');
@@ -37,10 +36,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'poker_club_jwt_secret_change_in_pr
 // ============================================================
 const app = express();
 
-// Trust proxy headers (required for Render, Heroku, etc. for rate limiting and HTTPS redirect)
 app.set('trust proxy', isProduction ? 1 : 0);
 
-// HTTPS redirect in production (Render terminates SSL at the proxy)
 if (isProduction) {
   app.use((req, res, next) => {
     if (req.headers['x-forwarded-proto'] !== 'https' && req.headers['x-forwarded-proto'] !== undefined) {
@@ -51,10 +48,8 @@ if (isProduction) {
 }
 
 if (isProduction) {
-  // In production, serve the built frontend
   app.use(express.static(path.join(__dirname, '../frontend/dist')));
 } else {
-  // In development, enable CORS for Vite dev server
   app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173' }));
 }
 
@@ -67,8 +62,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
-// Migration trigger — run database migration
-// In production, protected by MIGRATE_SECRET env var
+// Migration trigger
 const { migrate } = require('./migrate');
 app.get('/api/migrate', async (req, res) => {
   if (isProduction) {
@@ -88,7 +82,7 @@ app.get('/api/migrate', async (req, res) => {
 });
 
 // ============================================================
-// JWT Auth Middleware for REST endpoints
+// JWT Auth Middleware
 // ============================================================
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -104,10 +98,8 @@ function authenticateToken(req, res, next) {
 }
 
 // ============================================================
-// Challenge Progress API
+// Challenges / Achievements API
 // ============================================================
-
-// GET /api/challenges — get challenge definitions + user's progress
 app.get('/api/challenges', authenticateToken, async (req, res) => {
   try {
     const progress = await ChallengeTracker.getUserProgress(req.user.userId);
@@ -118,21 +110,20 @@ app.get('/api/challenges', authenticateToken, async (req, res) => {
   }
 });
 
-// Production catch-all: serve index.html for all non-API routes
+// Production catch-all: serve index.html
 if (isProduction) {
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
   });
 }
 
-// Production startup banner
 if (isProduction) {
   console.log('🏁 Production mode');
   console.log('   Serving frontend from dist/');
 }
 
 // ============================================================
-// Auth Routes (register / login)
+// Auth Routes
 // ============================================================
 
 // POST /api/auth/register
@@ -166,7 +157,7 @@ app.post('/api/auth/register', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO users (email, display_name, password_hash)
        VALUES ($1, $2, $3)
-       RETURNING id, email, display_name, avatar_color, created_at`,
+       RETURNING id, email, display_name, avatar_color, bankroll, created_at`,
       [email, displayName.trim(), hashedPassword]
     );
 
@@ -178,7 +169,13 @@ app.post('/api/auth/register', async (req, res) => {
     );
 
     res.status(201).json({
-      user: { id: user.id, email: user.email, displayName: user.display_name, avatarColor: user.avatar_color },
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.display_name,
+        avatarColor: user.avatar_color,
+        bankroll: parseInt(user.bankroll) || 10000,
+      },
       token,
     });
   } catch (err) {
@@ -197,7 +194,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const result = await pool.query(
-      'SELECT id, email, display_name, password_hash, avatar_color, total_wins, hands_played FROM users WHERE email = $1',
+      'SELECT id, email, display_name, password_hash, avatar_color, bankroll, total_wins, hands_played FROM users WHERE email = $1',
       [email]
     );
 
@@ -224,6 +221,7 @@ app.post('/api/auth/login', async (req, res) => {
         email: user.email,
         displayName: user.display_name,
         avatarColor: user.avatar_color,
+        bankroll: parseInt(user.bankroll) || 10000,
         totalWins: user.total_wins,
         handsPlayed: user.hands_played,
       },
@@ -247,7 +245,6 @@ const io = new Server(server, {
 
 // ============================================================
 // Socket.io Auth Middleware
-// Every connection must provide a valid JWT in the handshake
 // ============================================================
 io.use(async (socket, next) => {
   try {
@@ -268,57 +265,90 @@ io.use(async (socket, next) => {
 // ============================================================
 // In-Memory State
 // ============================================================
-// Map<clubId, ClubState>
-const clubs = new Map();
+// Map<gameId, RingGameState>
+const ringGames = new Map();
 
-// Map<socketId, { clubId, userId }> for quick lookups
+// Map<socketId, { gameId, userId, seatIndex }>
 const socketToPlayer = new Map();
 
-// Map<userId, socketId> for finding connected users (for challenges)
+// Map<userId, socketId> for finding connected users (challenges)
 const userIdToSocket = new Map();
 
-// Hand counters for dealer rotation across hands
-const handCounters = new Map(); // Map<clubId, number>
+// Hand counters for dealer rotation
+const handCounters = new Map(); // Map<gameId, number>
 
-// Disconnect timeouts for auto-fold when players disconnect mid-hand
-// Map<clubId:userId, timeoutId>
+// Disconnect timeouts
+// Map<gameId:userId, timeoutId>
 const disconnectTimeouts = new Map();
 
-// Action timers for auto-fold when a player takes too long
-// Map<clubId, timeoutId>
+// Action timers
+// Map<gameId, timeoutId>
 const actionTimers = new Map();
 
-// Track last action per club for display (clubId -> { seatIndex, action, amount, timestamp })
+// Last action per game
+// Map<gameId, { seatIndex, action, amount, timestamp }>
 const lastActions = new Map();
 
 // ============================================================
-// Club State Factory
+// Bankroll Helpers
 // ============================================================
-function createClubState(hostUserId, hostDisplayName, inviteCode) {
+
+/** Get a player's bankroll from DB */
+async function getBankroll(userId) {
+  const result = await pool.query('SELECT bankroll FROM users WHERE id = $1', [userId]);
+  return result.rows.length > 0 ? parseInt(result.rows[0].bankroll) : 10000;
+}
+
+/** Deduct from bankroll and return new balance */
+async function deductBankroll(userId, amount) {
+  const result = await pool.query(
+    'UPDATE users SET bankroll = bankroll - $1 WHERE id = $2 AND bankroll >= $1 RETURNING bankroll',
+    [amount, userId]
+  );
+  if (result.rows.length === 0) {
+    throw new Error('Insufficient bankroll');
+  }
+  return parseInt(result.rows[0].bankroll);
+}
+
+/** Add to bankroll and return new balance */
+async function addToBankroll(userId, amount) {
+  const result = await pool.query(
+    'UPDATE users SET bankroll = bankroll + $1 WHERE id = $2 RETURNING bankroll',
+    [amount, userId]
+  );
+  return parseInt(result.rows[0].bankroll);
+}
+
+/** Notify a player's socket about bankroll change */
+function notifyBankroll(userId, bankroll) {
+  const socketId = userIdToSocket.get(userId);
+  if (socketId) {
+    io.to(socketId).emit('bankroll_updated', { bankroll });
+  }
+}
+
+// ============================================================
+// Ring Game State Factory
+// ============================================================
+function createRingGameState(hostUserId, hostDisplayName, tableName, minBuyin, maxBuyin, sb, bb, timer) {
   const seats = Array(MAX_SEATS).fill(null);
-  seats[0] = {
-    userId: hostUserId,
-    userName: hostDisplayName,
-    stack: 1500,
-    isReady: false,
-    isConnected: true,
-    isSittingOut: false,
-  };
 
   return {
     id: uuidv4(),
-    inviteCode,
-    seats,
+    tableName: tableName || 'Poker Table',
+    minBuyin,
+    maxBuyin,
     hostId: hostUserId,
+    seats,
     tableSettings: {
-      sb: 10,
-      bb: 20,
-      startingStack: 1500,
-      timer: 20,
+      sb,
+      bb,
+      timer: timer || 20,
       allowRebuys: true,
     },
-    gameState: 'WAITING', // WAITING, PREFLOP, FLOP, TURN, RIVER, SHOWDOWN
-    currentHand: null, // Will hold hand state when game starts
+    gameState: 'WAITING',
+    currentHand: null,
     createdAt: Date.now(),
   };
 }
@@ -334,21 +364,20 @@ function findNextAvailableSeat(seats) {
 }
 
 // ============================================================
-// Determine socket room name for a club
+// Socket room name
 // ============================================================
-function clubRoom(clubId) {
-  return `club:${clubId}`;
+function gameRoom(gameId) {
+  return `game:${gameId}`;
 }
 
 // ============================================================
-// Emit club state update to all players in the room
+// Broadcast table state to all players
 // ============================================================
-function broadcastClubState(clubId) {
-  const club = clubs.get(clubId);
-  if (!club) return;
+function broadcastTableState(gameId) {
+  const game = ringGames.get(gameId);
+  if (!game) return;
 
-  // Build a clean player list (no sensitive info)
-  const players = club.seats.map((seat, index) => {
+  const players = game.seats.map((seat, index) => {
     if (!seat) return null;
     return {
       seatIndex: index,
@@ -356,42 +385,40 @@ function broadcastClubState(clubId) {
       stack: seat.stack,
       isReady: seat.isReady,
       isConnected: seat.isConnected,
-      isHost: seat.userId === club.hostId,
+      isHost: seat.userId === game.hostId,
       isSittingOut: seat.isSittingOut || false,
       isBot: seat.isBot || false,
     };
   });
 
-  io.to(clubRoom(clubId)).emit('club_state_update', {
-    clubId: club.id,
-    inviteCode: club.inviteCode,
+  io.to(gameRoom(gameId)).emit('table_state_update', {
+    gameId: game.id,
+    tableName: game.tableName,
+    minBuyin: game.minBuyin,
+    maxBuyin: game.maxBuyin,
     players,
-    hostId: club.hostId,
-    tableSettings: club.tableSettings,
-    gameState: club.gameState,
+    hostId: game.hostId,
+    tableSettings: game.tableSettings,
+    gameState: game.gameState,
   });
 }
 
 // ============================================================
-// Emit full game state to the club room
-// Sends public state to all, and private hole cards to each player
+// Broadcast game state (same as before)
 // ============================================================
-function broadcastGameState(clubId) {
-  const club = clubs.get(clubId);
-  if (!club || !club.currentHand) return;
+function broadcastGameState(gameId) {
+  const game = ringGames.get(gameId);
+  if (!game || !game.currentHand) return;
 
-  const hand = club.currentHand;
+  const hand = game.currentHand;
   const publicState = getPublicState(hand);
-  
-  // Broadcast public state to everyone
-  io.to(clubRoom(clubId)).emit('game_state_sync', publicState);
 
-  // Send hole cards to each individual player
+  io.to(gameRoom(gameId)).emit('game_state_sync', publicState);
+
   for (const player of hand.players) {
     const privateState = getPrivateState(hand, player.seatIndex);
-    // Find all sockets for this player
     for (const [socketId, info] of socketToPlayer) {
-      if (info.clubId === clubId && info.seatIndex === player.seatIndex) {
+      if (info.gameId === gameId && info.seatIndex === player.seatIndex) {
         io.to(socketId).emit('your_hole_cards', privateState);
       }
     }
@@ -402,30 +429,26 @@ function broadcastGameState(clubId) {
 // Action Timer Management
 // ============================================================
 
-/** Clear the action timer for a club */
-function clearActionTimer(clubId) {
-  if (actionTimers.has(clubId)) {
-    clearTimeout(actionTimers.get(clubId));
-    actionTimers.delete(clubId);
+function clearActionTimer(gameId) {
+  if (actionTimers.has(gameId)) {
+    clearTimeout(actionTimers.get(gameId));
+    actionTimers.delete(gameId);
   }
 }
 
-/** Process a bot player's turn immediately */
-function processBotAction(clubId) {
-  const club = clubs.get(clubId);
-  if (!club || !club.currentHand) return;
+function processBotAction(gameId) {
+  const game = ringGames.get(gameId);
+  if (!game || !game.currentHand) return;
 
-  const hand = club.currentHand;
+  const hand = game.currentHand;
   if (hand.gameStatus === GAME_STATES.SHOWDOWN || hand.gameStatus === GAME_STATES.HAND_COMPLETE) return;
 
   const currentPlayer = hand.players[hand.currentPlayerIndex];
   if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) return;
 
-  // Check if current player is a bot
-  const seat = club.seats[currentPlayer.seatIndex];
+  const seat = game.seats[currentPlayer.seatIndex];
   if (!seat || !seat.isBot) return;
 
-  // Bot decides its action
   const decision = decideAction(hand, currentPlayer.seatIndex);
   if (!decision) return;
 
@@ -434,25 +457,21 @@ function processBotAction(clubId) {
   const result = handleAction(hand, currentPlayer.seatIndex, decision.action, decision.amount);
   if (result.error) return;
 
-  // Record the action
-  recordAction(clubId, currentPlayer.seatIndex, decision.action, decision.amount);
+  recordAction(gameId, currentPlayer.seatIndex, decision.action, decision.amount);
 
-  // Update club state
-  club.gameState = hand.gameStatus;
+  game.gameState = hand.gameStatus;
   for (const hp of hand.players) {
-    const s = club.seats[hp.seatIndex];
+    const s = game.seats[hp.seatIndex];
     if (s) s.stack = hp.stack;
   }
 
-  broadcastGameState(clubId);
-  clearActionTimer(clubId);
+  broadcastGameState(gameId);
+  clearActionTimer(gameId);
 
-  // If hand is complete, schedule next hand
   if (isHandComplete(hand)) {
-    // Challenge tracking (non-blocking, fire-and-forget)
     trackHandComplete(hand);
-    lastActions.delete(clubId);
-    io.to(clubRoom(clubId)).emit('hand_complete', {
+    lastActions.delete(gameId);
+    io.to(gameRoom(gameId)).emit('hand_complete', {
       handResult: hand.handResult,
       communityCards: hand.communityCards,
       players: hand.players.map(p => ({
@@ -463,55 +482,51 @@ function processBotAction(clubId) {
       })),
     });
     setTimeout(() => {
-      const c = clubs.get(clubId);
-      if (!c) return;
-      const nextHandCount = (handCounters.get(clubId) || 0) + 1;
-      const nextHand = createHand(c, nextHandCount);
+      const g = ringGames.get(gameId);
+      if (!g) return;
+      const nextHandCount = (handCounters.get(gameId) || 0) + 1;
+      const nextHand = createHand(g, nextHandCount);
       if (nextHand) {
         startHand(nextHand);
-        c.currentHand = nextHand;
-        c.gameState = nextHand.gameStatus;
-        handCounters.set(clubId, nextHandCount);
-        broadcastGameState(clubId);
-        setActionTimer(clubId);
+        g.currentHand = nextHand;
+        g.gameState = nextHand.gameStatus;
+        handCounters.set(gameId, nextHandCount);
+        broadcastGameState(gameId);
+        setActionTimer(gameId);
       }
     }, 12000);
   } else {
-    // Schedule next bot action or set timer for human
-    setActionTimer(clubId);
+    setActionTimer(gameId);
   }
 }
 
-/** Set a new action timer for the current player in the hand */
-function setActionTimer(clubId) {
-  clearActionTimer(clubId);
+function setActionTimer(gameId) {
+  clearActionTimer(gameId);
 
-  const club = clubs.get(clubId);
-  if (!club || !club.currentHand) return;
+  const game = ringGames.get(gameId);
+  if (!game || !game.currentHand) return;
 
-  const hand = club.currentHand;
+  const hand = game.currentHand;
   if (hand.gameStatus === GAME_STATES.SHOWDOWN || hand.gameStatus === GAME_STATES.HAND_COMPLETE) return;
 
   const currentPlayer = hand.players[hand.currentPlayerIndex];
   if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) return;
 
-  // Check if current player is a bot — process immediately after a short delay
-  const seat = club.seats[currentPlayer.seatIndex];
+  const seat = game.seats[currentPlayer.seatIndex];
   if (seat && seat.isBot) {
-    const botDelay = 800 + Math.random() * 1200; // 0.8-2s delay for visual effect
-    const botTimeout = setTimeout(() => processBotAction(clubId), botDelay);
-    actionTimers.set(clubId, botTimeout);
+    const botDelay = 800 + Math.random() * 1200;
+    const botTimeout = setTimeout(() => processBotAction(gameId), botDelay);
+    actionTimers.set(gameId, botTimeout);
     return;
   }
 
   const timerMs = (hand.actionTimer || 20) * 1000;
 
   const timeout = setTimeout(() => {
-    // Auto-fold the current player
-    const clubNow = clubs.get(clubId);
-    if (!clubNow || !clubNow.currentHand) return;
+    const gameNow = ringGames.get(gameId);
+    if (!gameNow || !gameNow.currentHand) return;
 
-    const handNow = clubNow.currentHand;
+    const handNow = gameNow.currentHand;
     if (handNow.gameStatus === GAME_STATES.SHOWDOWN || handNow.gameStatus === GAME_STATES.HAND_COMPLETE) return;
 
     const playerIdx = handNow.currentPlayerIndex;
@@ -526,8 +541,7 @@ function setActionTimer(clubId) {
     const result = handleAction(handNow, seatIdx, 'fold');
     if (result.error) return;
 
-    // Record last action
-    lastActions.set(clubId, {
+    lastActions.set(gameId, {
       seatIndex: seatIdx,
       userName: player.userName,
       action: 'fold',
@@ -535,20 +549,17 @@ function setActionTimer(clubId) {
       timestamp: Date.now(),
     });
 
-    // Update club game state and stacks
-    clubNow.gameState = handNow.gameStatus;
+    gameNow.gameState = handNow.gameStatus;
     for (const hp of handNow.players) {
-      const seat = clubNow.seats[hp.seatIndex];
+      const seat = gameNow.seats[hp.seatIndex];
       if (seat) seat.stack = hp.stack;
     }
 
-    broadcastGameState(clubId);
+    broadcastGameState(gameId);
 
-    // If hand is complete, broadcast results and schedule next hand
     if (isHandComplete(handNow)) {
-      // Challenge tracking (non-blocking, fire-and-forget)
       trackHandComplete(handNow);
-      io.to(clubRoom(clubId)).emit('hand_complete', {
+      io.to(gameRoom(gameId)).emit('hand_complete', {
         handResult: handNow.handResult,
         communityCards: handNow.communityCards,
         players: handNow.players.map(p => ({
@@ -559,101 +570,82 @@ function setActionTimer(clubId) {
         })),
       });
 
-      // Schedule next hand after 5 seconds
       setTimeout(() => {
-        const c = clubs.get(clubId);
-        if (!c) return;
-        const nextHandCount = (handCounters.get(clubId) || 0) + 1;
-        const nextHand = createHand(c, nextHandCount);
+        const g = ringGames.get(gameId);
+        if (!g) return;
+        const nextHandCount = (handCounters.get(gameId) || 0) + 1;
+        const nextHand = createHand(g, nextHandCount);
         if (nextHand) {
           startHand(nextHand);
-          c.currentHand = nextHand;
-          c.gameState = nextHand.gameStatus;
-          handCounters.set(clubId, nextHandCount);
-          broadcastGameState(clubId);
-          setActionTimer(clubId);
+          g.currentHand = nextHand;
+          g.gameState = nextHand.gameStatus;
+          handCounters.set(gameId, nextHandCount);
+          broadcastGameState(gameId);
+          setActionTimer(gameId);
         }
       }, 12000);
     } else {
-      // Set timer for the next player
-      setActionTimer(clubId);
+      setActionTimer(gameId);
     }
   }, timerMs);
 
-  actionTimers.set(clubId, timeout);
+  actionTimers.set(gameId, timeout);
 }
 
-/**
- * Check if all seated players are ready and auto-start if so.
- * Called after player_ready, add_bots, or when all seats fill.
- */
-function checkAutoStart(clubId) {
-  const club = clubs.get(clubId);
-  if (!club || club.gameState !== 'WAITING') return;
+function checkAutoStart(gameId) {
+  const game = ringGames.get(gameId);
+  if (!game || game.gameState !== 'WAITING') return;
 
-  // Need at least 2 active players (connected, not sitting out)
-  const seated = club.seats.filter(s => s && s.isConnected && !s.isSittingOut);
+  const seated = game.seats.filter(s => s && s.isConnected && !s.isSittingOut);
   if (seated.length < 2) return;
 
-  // Check if ALL seated players are ready
   const allReady = seated.every(s => s.isReady === true);
   if (!allReady) return;
 
-  console.log(`[Auto-Start] All ${seated.length} players ready in club ${clubId}. Starting game...`);
+  console.log(`[Auto-Start] All ${seated.length} players ready in game ${gameId}. Starting game...`);
 
-  // Start the game (same logic as start_game handler)
-  let handCount = handCounters.get(clubId) || 0;
-  const hand = createHand(club, handCount);
+  let handCount = handCounters.get(gameId) || 0;
+  const hand = createHand(game, handCount);
   if (!hand) return;
 
   startHand(hand);
-  club.currentHand = hand;
-  club.gameState = hand.gameStatus;
-  handCounters.set(clubId, handCount + 1);
+  game.currentHand = hand;
+  game.gameState = hand.gameStatus;
+  handCounters.set(gameId, handCount + 1);
 
-  console.log(`[Start Game] Club ${clubId} hand ${handCount} started (auto-start)`);
+  console.log(`[Start Game] Game ${gameId} hand ${handCount} started (auto-start)`);
 
-  broadcastGameState(clubId);
-  setActionTimer(clubId);
+  broadcastGameState(gameId);
+  setActionTimer(gameId);
 }
 
-/**
- * Track all challenge stats when a hand completes.
- * Called from all three hand-complete paths (bot, auto-fold, player action).
- */
 function trackHandComplete(hand) {
   if (!hand) return;
 
-  // Hands played — for every non-bot player dealt in
   hand.players.forEach(p => {
     if (p.userId && !p.userId.startsWith('bot_')) {
       ChallengeTracker.trackStat(p.userId, 'handsPlayed', 1);
     }
   });
 
-  // Winner-specific tracking
   if (hand.winningUserId && !hand.winningUserId.startsWith('bot_')) {
     ChallengeTracker.trackStat(hand.winningUserId, 'handsWon', 1);
 
-    // Showdown (uncontested wins don't count as showdown wins)
     if (hand.winningRank > 0) {
       ChallengeTracker.trackStat(hand.winningUserId, 'showdownsWon', 1);
     }
 
-    // Hand rank tracking (rank 0 = uncontested)
     if (hand.winningRank >= 2 && hand.winningRank <= 9) {
       const statName = RANK_STATS[hand.winningRank];
       if (statName) {
         ChallengeTracker.trackStat(hand.winningUserId, statName, 1);
       }
-      // Royal flush shares rank 9 with straight flush — track both
       if (hand.winningRank === 9) {
         ChallengeTracker.trackStat(hand.winningUserId, 'royalFlushMade', 1);
       }
     }
   }
 
-  // Showdowns reached — for all non-folded non-bot players at showdown
   if (hand.gameStatus === 'SHOWDOWN' || hand.gameStatus === 'HAND_COMPLETE') {
     const activePlayers = hand.players.filter(p => !p.isFolded);
     activePlayers.forEach(p => {
@@ -664,12 +656,11 @@ function trackHandComplete(hand) {
   }
 }
 
-/** Record and broadcast the last action */
-function recordAction(clubId, seatIndex, action, amount) {
-  const club = clubs.get(clubId);
-  if (!club || !club.currentHand) return;
+function recordAction(gameId, seatIndex, action, amount) {
+  const game = ringGames.get(gameId);
+  if (!game || !game.currentHand) return;
 
-  const player = club.currentHand.players.find(p => p.seatIndex === seatIndex);
+  const player = game.currentHand.players.find(p => p.seatIndex === seatIndex);
   if (!player) return;
 
   const actionRecord = {
@@ -680,212 +671,416 @@ function recordAction(clubId, seatIndex, action, amount) {
     timestamp: Date.now(),
   };
 
-  lastActions.set(clubId, actionRecord);
-
-  // Broadcast last action to the room
-  io.to(clubRoom(clubId)).emit('last_action', actionRecord);
+  lastActions.set(gameId, actionRecord);
+  io.to(gameRoom(gameId)).emit('last_action', actionRecord);
 }
 
 // ============================================================
 // Socket.io Event Handlers
 // ============================================================
-io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user: ${socket.displayName})`);
+io.on('connection', (socket) => {
+  console.log(`[Connect] ${socket.id} (user: ${socket.displayName})`);
 
-  // Track this user's socket for challenge notifications
   userIdToSocket.set(socket.userId, socket.id);
 
-  // ---------- CREATE CLUB ----------
-  socket.on('create_club', async (data, callback) => {
+  // ---------- GET BANKROLL ----------
+  socket.on('get_bankroll', async (data, callback) => {
     try {
-      // userId comes from the authenticated socket, not from the payload
-      const userId = socket.userId;
-      const displayName = socket.displayName;
+      const bankroll = await getBankroll(socket.userId);
+      callback(null, { bankroll });
+    } catch (err) {
+      callback({ error: 'Failed to get bankroll' });
+    }
+  });
 
-      if (!displayName || displayName.trim().length === 0) {
-        return callback({ error: 'Display name is required' });
-      }
-      if (displayName.length > 20) {
-        return callback({ error: 'Display name must be 20 characters or less' });
-      }
-
-      const trimmedName = displayName.trim();
-
-      // Generate a unique invite code
-      let inviteCode;
-      let isUnique = false;
-      while (!isUnique) {
-        inviteCode = generateInviteCode();
-        // Check club codes in memory and DB
-        const existingInMemory = Array.from(clubs.values()).find(c => c.inviteCode === inviteCode);
-        if (!existingInMemory) {
-          const dbResult = await pool.query('SELECT id FROM clubs WHERE invite_code = $1', [inviteCode]);
-          if (dbResult.rows.length === 0) {
-            isUnique = true;
-          }
+  // ---------- GET RING GAMES ----------
+  socket.on('get_ring_games', async (data, callback) => {
+    try {
+      // Return in-memory games plus DB-active games
+      const activeGames = [];
+      for (const [id, game] of ringGames) {
+        if (game.gameState !== undefined) {
+          const seatedCount = game.seats.filter(s => s !== null).length;
+          activeGames.push({
+            id,
+            tableName: game.tableName,
+            hostId: game.hostId,
+            minBuyin: game.minBuyin,
+            maxBuyin: game.maxBuyin,
+            smallBlind: game.tableSettings.sb,
+            bigBlind: game.tableSettings.bb,
+            seatedCount,
+            maxPlayers: MAX_SEATS,
+            gameState: game.gameState,
+          });
         }
       }
 
-      // Create the club
-      const clubState = createClubState(userId, trimmedName, inviteCode);
-      clubs.set(clubState.id, clubState);
-
-      // Persist to database
-      try {
-        await pool.query(
-          `INSERT INTO clubs (id, invite_code, host_user_id, small_blind, big_blind, starting_stack, action_timer_seconds, allow_rebuys)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [clubState.id, inviteCode, userId, clubState.tableSettings.sb, clubState.tableSettings.bb,
-           clubState.tableSettings.startingStack, clubState.tableSettings.timer, clubState.tableSettings.allowRebuys]
-        );
-      } catch (dbErr) {
-        console.error('[DB] Error persisting club:', dbErr.message);
-        // Non-fatal: in-memory state still works
+      // Also fetch from DB for persisted games not in memory (rare)
+      if (activeGames.length === 0) {
+        try {
+          const dbResult = await pool.query(
+            `SELECT id, table_name, host_user_id, min_buyin, max_buyin, small_blind, big_blind
+             FROM ring_games WHERE is_active = TRUE ORDER BY created_at DESC LIMIT 20`
+          );
+          for (const row of dbResult.rows) {
+            // Don't re-add if already in memory
+            if (!ringGames.has(row.id)) {
+              activeGames.push({
+                id: row.id,
+                tableName: row.table_name,
+                hostId: row.host_user_id,
+                minBuyin: row.min_buyin,
+                maxBuyin: row.max_buyin,
+                smallBlind: row.small_blind,
+                bigBlind: row.big_blind,
+                seatedCount: 0,
+                maxPlayers: MAX_SEATS,
+                gameState: 'WAITING',
+              });
+            }
+          }
+        } catch (dbErr) {
+          console.error('[DB] Error fetching ring games:', dbErr.message);
+        }
       }
 
-      // Join the socket room
-      socket.join(clubRoom(clubState.id));
-      socketToPlayer.set(socket.id, { clubId: clubState.id, userId, seatIndex: 0 });
-
-      console.log(`[Create Club] ${trimmedName} created club ${clubState.id} (code: ${inviteCode})`);
-
-      callback(null, {
-        clubId: clubState.id,
-        inviteCode: clubState.inviteCode,
-        userId,
-        seatIndex: 0,
-      });
-
-      broadcastClubState(clubState.id);
+      callback(null, { games: activeGames });
     } catch (err) {
-      console.error('[Create Club Error]', err);
-      callback({ error: 'Failed to create club' });
+      console.error('[Get Ring Games Error]', err);
+      callback({ error: 'Failed to get ring games' });
     }
   });
 
-  // ---------- JOIN CLUB ----------
-  socket.on('join_club', async ({ inviteCode }, callback) => {
+  // ---------- CREATE RING GAME ----------
+  socket.on('create_ring_game', async ({ tableName, minBuyin, maxBuyin, smallBlind, bigBlind, actionTimer, buyinAmount }, callback) => {
     try {
-      if (!inviteCode || inviteCode.trim().length === 0) {
-        return callback({ error: 'Invite code is required' });
-      }
-
-      const code = inviteCode.trim().toUpperCase();
       const userId = socket.userId;
       const displayName = socket.displayName;
 
-      // Find the club
-      const club = Array.from(clubs.values()).find(c => c.inviteCode === code);
-      if (!club) {
-        return callback({ error: 'Club not found. Check your invite code.' });
+      // Validation
+      if (!tableName || tableName.trim().length === 0) {
+        return callback({ error: 'Table name is required' });
+      }
+      if (!minBuyin || !maxBuyin || minBuyin < 50 || maxBuyin > 50000000) {
+        return callback({ error: 'Buy-in range 50 - 50,000,000 chips' });
+      }
+      if (minBuyin > maxBuyin) {
+        return callback({ error: 'Min buy-in cannot exceed max buy-in' });
+      }
+      if (!smallBlind || !bigBlind || smallBlind < 1 || bigBlind < 2) {
+        return callback({ error: 'Invalid blind amounts' });
+      }
+      if (tableName.trim().length > 30) {
+        return callback({ error: 'Table name must be 30 characters or less' });
       }
 
-      // Check if player is already in this club
-      const existingSeat = club.seats.findIndex(s => s && s.userId === userId);
-      if (existingSeat !== -1) {
-        // Player is already in this club — rejoin
-        socket.join(clubRoom(club.id));
-        socketToPlayer.set(socket.id, { clubId: club.id, userId, seatIndex: existingSeat });
-        club.seats[existingSeat].isConnected = true;
-        console.log(`[Rejoin] ${displayName} already in club at seat ${existingSeat}`);
-        callback(null, {
-          clubId: club.id,
-          inviteCode: club.inviteCode,
-          userId,
-          seatIndex: existingSeat,
-        });
-        broadcastClubState(club.id);
-        return;
+      // Determine host buy-in amount
+      const hostBuyin = buyinAmount ? parseInt(buyinAmount) : parseInt(minBuyin);
+      if (hostBuyin < parseInt(minBuyin) || hostBuyin > parseInt(maxBuyin)) {
+        return callback({ error: `Host buy-in must be between ${parseInt(minBuyin)} and ${parseInt(maxBuyin)}` });
       }
 
-      // Check if club is full
-      const seatIndex = findNextAvailableSeat(club.seats);
-      if (seatIndex === -1) {
-        return callback({ error: 'Club is full (max 6 players)' });
+      // Deduct from bankroll
+      let newBankroll;
+      try {
+        newBankroll = await deductBankroll(userId, hostBuyin);
+      } catch (e) {
+        return callback({ error: 'Insufficient bankroll to buy in' });
       }
 
-      // Assign seat
-      club.seats[seatIndex] = {
+      // Create ring game state
+      const gameState = createRingGameState(
+        userId,
+        displayName,
+        tableName.trim(),
+        parseInt(minBuyin),
+        parseInt(maxBuyin),
+        parseInt(smallBlind),
+        parseInt(bigBlind),
+        parseInt(actionTimer) || 20
+      );
+
+      // Seat the host at seat 0
+      let sessionId = null;
+      try {
+        const sessionResult = await pool.query(
+          `INSERT INTO player_sessions (user_id, game_id, buyin_amount, current_stack)
+           VALUES ($1, $2, $3, $4) RETURNING id`,
+          [userId, gameState.id, hostBuyin, hostBuyin]
+        );
+        sessionId = sessionResult.rows[0].id;
+      } catch (dbErr) {
+        console.error('[DB] Error creating host session:', dbErr.message);
+      }
+
+      gameState.seats[0] = {
         userId,
         userName: displayName,
-        stack: club.tableSettings.startingStack,
-        isReady: false,
+        stack: hostBuyin,
+        isReady: true,
         isConnected: true,
         isSittingOut: false,
+        sessionId,
       };
 
-      // Join socket room
-      socket.join(clubRoom(club.id));
-      socketToPlayer.set(socket.id, { clubId: club.id, userId, seatIndex });
+      ringGames.set(gameState.id, gameState);
 
-      console.log(`[Join Club] ${displayName} joined club ${club.id} (code: ${code}) at seat ${seatIndex}`);
+      // Persist game to database
+      try {
+        await pool.query(
+          `INSERT INTO ring_games (id, table_name, host_user_id, min_buyin, max_buyin, small_blind, big_blind, action_timer_seconds)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [gameState.id, gameState.tableName, userId, gameState.minBuyin, gameState.maxBuyin,
+           gameState.tableSettings.sb, gameState.tableSettings.bb, gameState.tableSettings.timer]
+        );
+      } catch (dbErr) {
+        console.error('[DB] Error persisting ring game:', dbErr.message);
+      }
+
+      socket.join(gameRoom(gameState.id));
+      socketToPlayer.set(socket.id, { gameId: gameState.id, userId, seatIndex: 0 });
+
+      notifyBankroll(userId, newBankroll);
+
+      console.log(`[Create Ring Game] ${displayName} created table "${gameState.tableName}" with ${hostBuyin} buy-in`);
 
       callback(null, {
-        clubId: club.id,
-        inviteCode: club.inviteCode,
+        gameId: gameState.id,
+        tableName: gameState.tableName,
         userId,
-        seatIndex,
+        seatIndex: 0,
+        buyinAmount: hostBuyin,
+        minBuyin: gameState.minBuyin,
+        maxBuyin: gameState.maxBuyin,
       });
 
-      broadcastClubState(club.id);
+      broadcastTableState(gameState.id);
     } catch (err) {
-      console.error('[Join Club Error]', err);
-      callback({ error: 'Failed to join club' });
+      console.error('[Create Ring Game Error]', err);
+      callback({ error: 'Failed to create ring game' });
     }
   });
 
+  // ---------- JOIN RING GAME ----------
+  socket.on('join_ring_game', async ({ gameId, buyinAmount }, callback) => {
+    try {
+      const userId = socket.userId;
+      const displayName = socket.displayName;
 
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback({ error: 'Table not found' });
+      }
 
-  // ---------- START GAME ----------
-  socket.on('start_game', ({ clubId }, callback) => {
+      // Check already seated
+      const existingSeat = game.seats.findIndex(s => s && s.userId === userId);
+      if (existingSeat !== -1) {
+        // Already at this table - rejoin
+        socket.join(gameRoom(gameId));
+        socketToPlayer.set(socket.id, { gameId, userId, seatIndex: existingSeat });
+        game.seats[existingSeat].isConnected = true;
+        console.log(`[Rejoin] ${displayName} already at table seat ${existingSeat}`);
+        callback(null, {
+          gameId,
+          tableName: game.tableName,
+          userId,
+          seatIndex: existingSeat,
+          buyinAmount: game.seats[existingSeat].stack,
+        });
+        broadcastTableState(gameId);
+        return;
+      }
+
+      // Validate buy-in
+      const buyin = parseInt(buyinAmount);
+      if (!buyin || buyin < game.minBuyin || buyin > game.maxBuyin) {
+        return callback({ error: `Buy-in must be between ${game.minBuyin} and ${game.maxBuyin} chips` });
+      }
+
+      // Check if table is full
+      const seatIndex = findNextAvailableSeat(game.seats);
+      if (seatIndex === -1) {
+        return callback({ error: 'Table is full (max 6 players)' });
+      }
+
+      // Deduct from bankroll
+      let newBankroll;
+      try {
+        newBankroll = await deductBankroll(userId, buyin);
+      } catch (e) {
+        return callback({ error: 'Insufficient bankroll. You need ' + buyin + ' chips to buy in.' });
+      }
+
+      // Create player session
+      let sessionId = null;
+      try {
+        const sessionResult = await pool.query(
+          `INSERT INTO player_sessions (user_id, game_id, buyin_amount, current_stack)
+           VALUES ($1, $2, $3, $4) RETURNING id`,
+          [userId, gameId, buyin, buyin]
+        );
+        sessionId = sessionResult.rows[0].id;
+      } catch (dbErr) {
+        console.error('[DB] Error creating player session:', dbErr.message);
+      }
+
+      // Assign seat
+      game.seats[seatIndex] = {
+        userId,
+        userName: displayName,
+        stack: buyin,
+        isReady: true,
+        isConnected: true,
+        isSittingOut: false,
+        sessionId,
+      };
+
+      socket.join(gameRoom(gameId));
+      socketToPlayer.set(socket.id, { gameId, userId, seatIndex });
+
+      console.log(`[Join Ring Game] ${displayName} joined "${game.tableName}" with ${buyin} chips at seat ${seatIndex}`);
+
+      notifyBankroll(userId, newBankroll);
+
+      callback(null, {
+        gameId,
+        tableName: game.tableName,
+        minBuyin: game.minBuyin,
+        maxBuyin: game.maxBuyin,
+        userId,
+        seatIndex,
+        buyinAmount: buyin,
+      });
+
+      broadcastTableState(gameId);
+      
+      // Auto-start if enough players are ready (ring games: bought-in = ready)
+      checkAutoStart(gameId);
+    } catch (err) {
+      console.error('[Join Ring Game Error]', err);
+      callback({ error: 'Failed to join ring game' });
+    }
+  });
+
+  // ---------- LEAVE RING GAME (Cash Out) ----------
+  socket.on('leave_ring_game', async ({ gameId }, callback) => {
     try {
       const playerInfo = socketToPlayer.get(socket.id);
-      if (!playerInfo || playerInfo.clubId !== clubId) {
-        return callback && callback({ error: 'Not in this club' });
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback({ error: 'Not at this table' });
       }
 
-      const club = clubs.get(clubId);
-      if (!club) {
-        return callback && callback({ error: 'Club not found' });
+      const game = ringGames.get(gameId);
+      if (!game) {
+        socketToPlayer.delete(socket.id);
+        return callback({ error: 'Table not found' });
       }
 
-      // Only host can start
-      if (playerInfo.userId !== club.hostId) {
+      const seat = game.seats[playerInfo.seatIndex];
+      if (!seat || seat.userId !== socket.userId) {
+        return callback({ error: 'Not seated at this table' });
+      }
+
+      const cashOutAmount = seat.stack || 0;
+
+      // Add stack back to bankroll
+      let newBankroll;
+      try {
+        newBankroll = await addToBankroll(socket.userId, cashOutAmount);
+      } catch (e) {
+        console.error('[DB] Error adding to bankroll:', e.message);
+        newBankroll = await getBankroll(socket.userId);
+      }
+
+      // Update player session
+      if (seat.sessionId) {
+        try {
+          await pool.query(
+            'UPDATE player_sessions SET current_stack = $1, left_at = NOW() WHERE id = $2',
+            [cashOutAmount, seat.sessionId]
+          );
+        } catch (dbErr) {
+          console.error('[DB] Error updating player session:', dbErr.message);
+        }
+      }
+
+      // Remove from seat
+      game.seats[playerInfo.seatIndex] = null;
+      socket.leave(gameRoom(gameId));
+      socketToPlayer.delete(socket.id);
+
+      // If host left, assign new host or mark inactive
+      if (seat.userId === game.hostId) {
+        const nextPlayer = game.seats.find(s => s && !s.isBot);
+        if (nextPlayer) {
+          game.hostId = nextPlayer.userId;
+          console.log(`[Host] New host for ${gameId}: ${nextPlayer.userName}`);
+        } else {
+          // No human players left — deactivate
+          try {
+            await pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId]);
+          } catch (dbErr) {
+            console.error('[DB] Error deactivating game:', dbErr.message);
+          }
+          ringGames.delete(gameId);
+          console.log(`[Game] ${gameId} deactivated (no players)`);
+        }
+      }
+
+      notifyBankroll(socket.userId, newBankroll);
+
+      console.log(`[Cash Out] ${seat.userName} cashed out ${cashOutAmount} chips from "${game.tableName}"`);
+
+      callback(null, { cashOutAmount, bankroll: newBankroll });
+      broadcastTableState(gameId);
+    } catch (err) {
+      console.error('[Leave Ring Game Error]', err);
+      callback({ error: 'Failed to cash out' });
+    }
+  });
+
+  // ---------- START GAME ----------
+  socket.on('start_game', ({ gameId }, callback) => {
+    try {
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
+      }
+
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
+      }
+
+      if (playerInfo.userId !== game.hostId) {
         return callback && callback({ error: 'Only the host can start the game' });
       }
 
-      // Can't start if game is already in progress
-      if (club.gameState !== 'WAITING') {
+      if (game.gameState !== 'WAITING') {
         return callback && callback({ error: 'Game already in progress' });
       }
 
-      // Need at least 2 players
-      const activePlayers = club.seats.filter(s => s && s.isConnected);
+      const activePlayers = game.seats.filter(s => s && s.isConnected);
       if (activePlayers.length < 2) {
         return callback && callback({ error: 'Need at least 2 connected players' });
       }
 
-      // Get or initialize hand counter
-      let handCount = handCounters.get(clubId) || 0;
-
-      // Create and start the hand
-      const hand = createHand(club, handCount);
+      let handCount = handCounters.get(gameId) || 0;
+      const hand = createHand(game, handCount);
       if (!hand) {
         return callback && callback({ error: 'Not enough active players' });
       }
 
       startHand(hand);
-      club.currentHand = hand;
-      club.gameState = hand.gameStatus;
+      game.currentHand = hand;
+      game.gameState = hand.gameStatus;
+      handCounters.set(gameId, handCount + 1);
 
-      handCounters.set(clubId, handCount + 1);
+      console.log(`[Start Game] Game ${gameId} hand ${handCount} started`);
 
-      console.log(`[Start Game] Club ${clubId} hand ${handCount} started`);
-
-      // Broadcast game state
-      broadcastGameState(clubId);
-
-      // Start the action timer
-      setActionTimer(clubId);
+      broadcastGameState(gameId);
+      setActionTimer(gameId);
 
       callback && callback(null, { success: true });
     } catch (err) {
@@ -895,54 +1090,49 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
   });
 
   // ---------- PLAYER ACTION ----------
-  socket.on('player_action', ({ clubId, action, amount }, callback) => {
+  socket.on('player_action', ({ gameId, action, amount }, callback) => {
     try {
       const playerInfo = socketToPlayer.get(socket.id);
-      if (!playerInfo || playerInfo.clubId !== clubId) {
-        return callback && callback({ error: 'Not in this club' });
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
       }
 
-      const club = clubs.get(clubId);
-      if (!club || !club.currentHand) {
+      const game = ringGames.get(gameId);
+      if (!game || !game.currentHand) {
         return callback && callback({ error: 'No game in progress' });
       }
 
-      const result = handleAction(club.currentHand, playerInfo.seatIndex, action, amount);
+      const result = handleAction(game.currentHand, playerInfo.seatIndex, action, amount);
 
       if (result.error) {
         return callback && callback({ error: result.error });
       }
 
-      // Record the last action for display
-      recordAction(clubId, playerInfo.seatIndex, action, amount);
+      recordAction(gameId, playerInfo.seatIndex, action, amount);
 
-      // Track action stats (non-blocking, fire-and-forget)
-      const actingUserId = club.currentHand.players.find(p => p.seatIndex === playerInfo.seatIndex)?.userId;
+      const actingUserId = game.currentHand.players.find(p => p.seatIndex === playerInfo.seatIndex)?.userId;
       if (actingUserId && !actingUserId.startsWith('bot_')) {
         const actionStatMap = { fold: 'foldsMade', call: 'callsMade', raise: 'raisesMade', bet: 'betsMade' };
         const statName = actionStatMap[action];
         if (statName) {
           ChallengeTracker.trackStat(actingUserId, statName, 1);
         }
-        // Check if player went all-in with this action
-        const player = club.currentHand.players.find(p => p.seatIndex === playerInfo.seatIndex);
+        const player = game.currentHand.players.find(p => p.seatIndex === playerInfo.seatIndex);
         if (player && player.isAllIn) {
           ChallengeTracker.trackStat(actingUserId, 'allInsMade', 1);
         }
       }
 
-      // Track street advances (for all non-folded players who saw the new street)
-      if (club.currentHand && (club.currentHand.gameStatus === 'FLOP' || club.currentHand.gameStatus === 'TURN' || club.currentHand.gameStatus === 'RIVER')) {
-        // Check if this is a new street (the previous gameState was the prior street)
-        const prevStatus = club.gameState;
-        const newStatus = club.currentHand.gameStatus;
+      if (game.currentHand && (game.currentHand.gameStatus === 'FLOP' || game.currentHand.gameStatus === 'TURN' || game.currentHand.gameStatus === 'RIVER')) {
+        const prevStatus = game.gameState;
+        const newStatus = game.currentHand.gameStatus;
         const streetStat = {
           'FLOP': 'flopsSeen',
           'TURN': 'turnsSeen',
           'RIVER': 'riversSeen',
         }[newStatus];
         if (streetStat && prevStatus !== newStatus) {
-          const activePlayers = club.currentHand.players.filter(p => !p.isFolded && !p.isAllIn);
+          const activePlayers = game.currentHand.players.filter(p => !p.isFolded && !p.isAllIn);
           activePlayers.forEach(p => {
             if (p.userId && !p.userId.startsWith('bot_')) {
               ChallengeTracker.trackStat(p.userId, streetStat, 1);
@@ -951,32 +1141,24 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
         }
       }
 
-      // Update club game state
-      club.gameState = club.currentHand.gameStatus;
+      game.gameState = game.currentHand.gameStatus;
 
-      // Update seat stacks from hand state
-      for (const hp of club.currentHand.players) {
-        const seat = club.seats[hp.seatIndex];
+      for (const hp of game.currentHand.players) {
+        const seat = game.seats[hp.seatIndex];
         if (seat) {
           seat.stack = hp.stack;
         }
       }
 
-      // Broadcast updated state
-      broadcastGameState(clubId);
+      broadcastGameState(gameId);
+      clearActionTimer(gameId);
 
-      // Clear the action timer for the old turn
-      clearActionTimer(clubId);
-
-      // If hand is complete, broadcast results and schedule next hand
-      if (isHandComplete(club.currentHand)) {
-        const hand = club.currentHand;
-
-        // Challenge tracking (non-blocking, fire-and-forget)
+      if (isHandComplete(game.currentHand)) {
+        const hand = game.currentHand;
         trackHandComplete(hand);
-        lastActions.delete(clubId);
+        lastActions.delete(gameId);
 
-        io.to(clubRoom(clubId)).emit('hand_complete', {
+        io.to(gameRoom(gameId)).emit('hand_complete', {
           handResult: hand.handResult,
           communityCards: hand.communityCards,
           players: hand.players.map(p => ({
@@ -987,13 +1169,12 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
           })),
         });
 
-        // Persist hand history to database (non-blocking)
         try {
           pool.query(
-            `INSERT INTO hand_histories (club_id, final_board, players_in_hand, pot_splits)
+            `INSERT INTO hand_histories (game_id, final_board, players_in_hand, pot_splits)
              VALUES ($1, $2, $3, $4)`,
             [
-              clubId,
+              gameId,
               JSON.stringify(hand.communityCards),
               JSON.stringify(hand.players.map(p => ({
                 seatIndex: p.seatIndex,
@@ -1011,23 +1192,20 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
           console.error('[DB] Hand history error:', dbErr.message);
         }
 
-        // Schedule next hand after 12 seconds (time for players to see showdown)
         setTimeout(() => {
-          const nextHandCount = (handCounters.get(clubId) || 0) + 1;
-          const nextHand = createHand(club, nextHandCount);
+          const nextHandCount = (handCounters.get(gameId) || 0) + 1;
+          const nextHand = createHand(game, nextHandCount);
           if (nextHand) {
             startHand(nextHand);
-            club.currentHand = nextHand;
-            club.gameState = nextHand.gameStatus;
-            handCounters.set(clubId, nextHandCount);
-            broadcastGameState(clubId);
-            // Start timer for the new hand's first turn
-            setActionTimer(clubId);
+            game.currentHand = nextHand;
+            game.gameState = nextHand.gameStatus;
+            handCounters.set(gameId, nextHandCount);
+            broadcastGameState(gameId);
+            setActionTimer(gameId);
           }
         }, 12000);
       } else {
-        // Set timer for the next player's turn
-        setActionTimer(clubId);
+        setActionTimer(gameId);
       }
 
       callback && callback(null, { success: true });
@@ -1038,80 +1216,75 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
   });
 
   // ---------- TOGGLE READY ----------
-  socket.on('player_ready', ({ clubId }) => {
+  socket.on('player_ready', ({ gameId }) => {
     const playerInfo = socketToPlayer.get(socket.id);
-    if (!playerInfo || playerInfo.clubId !== clubId) return;
+    if (!playerInfo || playerInfo.gameId !== gameId) return;
 
-    const club = clubs.get(clubId);
-    if (!club) return;
+    const game = ringGames.get(gameId);
+    if (!game) return;
 
-    const seat = club.seats[playerInfo.seatIndex];
+    const seat = game.seats[playerInfo.seatIndex];
     if (!seat) return;
 
     seat.isReady = !seat.isReady;
     console.log(`[Ready] ${seat.userName} is ${seat.isReady ? 'ready' : 'not ready'}`);
 
-    broadcastClubState(clubId);
-    
-    // Check if all players are now ready — auto-start!
-    checkAutoStart(clubId);
+    broadcastTableState(gameId);
+    checkAutoStart(gameId);
   });
 
-  // ---------- RECONNECT / REJOIN ----------
-  socket.on('rejoin_club', ({ clubId }, callback) => {
-    const club = clubs.get(clubId);
-    if (!club) return callback({ error: 'Club not found' });
+  // ---------- REJOIN RING GAME ----------
+  socket.on('rejoin_ring_game', ({ gameId }, callback) => {
+    const game = ringGames.get(gameId);
+    if (!game) return callback({ error: 'Table not found' });
 
     const userId = socket.userId;
 
-    // Find the player's seat
-    const seatIndex = club.seats.findIndex(s => s && s.userId === userId);
-    if (seatIndex === -1) return callback({ error: 'Player not found in club' });
+    const seatIndex = game.seats.findIndex(s => s && s.userId === userId);
+    if (seatIndex === -1) return callback({ error: 'Player not found at this table' });
 
-    const seat = club.seats[seatIndex];
+    const seat = game.seats[seatIndex];
     seat.isConnected = true;
 
-    // Clear any auto-fold timeout for this player (they reconnected!)
-    const timeoutKey = `${clubId}:${userId}`;
+    const timeoutKey = `${gameId}:${userId}`;
     if (disconnectTimeouts.has(timeoutKey)) {
       clearTimeout(disconnectTimeouts.get(timeoutKey));
       disconnectTimeouts.delete(timeoutKey);
       console.log(`[Reconnect] ${seat.userName} reconnected, auto-fold timeout cleared`);
     }
 
-    socket.join(clubRoom(clubId));
-    socketToPlayer.set(socket.id, { clubId, userId, seatIndex });
+    socket.join(gameRoom(gameId));
+    socketToPlayer.set(socket.id, { gameId, userId, seatIndex });
 
-    // Send club state
     callback(null, {
-      clubId: club.id,
-      inviteCode: club.inviteCode,
+      gameId: game.id,
+      tableName: game.tableName,
       userId,
       seatIndex,
+      minBuyin: game.minBuyin,
+      maxBuyin: game.maxBuyin,
     });
 
-    broadcastClubState(clubId);
+    broadcastTableState(gameId);
 
-    // If a game is in progress, send full state snapshot to this socket
-    if (club.currentHand) {
-      const snapshot = getReconnectionSnapshot(club.currentHand, seatIndex);
+    if (game.currentHand) {
+      const snapshot = getReconnectionSnapshot(game.currentHand, seatIndex);
       socket.emit('full_state_snapshot', snapshot);
     }
   });
 
   // ---------- SEND EMOJI ----------
-  socket.on('send_emoji', ({ clubId, emoji }) => {
+  socket.on('send_emoji', ({ gameId, emoji }) => {
     const playerInfo = socketToPlayer.get(socket.id);
-    if (!playerInfo || playerInfo.clubId !== clubId) return;
+    if (!playerInfo || playerInfo.gameId !== gameId) return;
 
-    const club = clubs.get(clubId);
-    if (!club) return;
+    const game = ringGames.get(gameId);
+    if (!game) return;
 
-    const seat = club.seats[playerInfo.seatIndex];
+    const seat = game.seats[playerInfo.seatIndex];
     if (!seat) return;
 
-    // Broadcast emoji to all players in the club room
-    io.to(clubRoom(clubId)).emit('emoji_received', {
+    io.to(gameRoom(gameId)).emit('emoji_received', {
       seatIndex: playerInfo.seatIndex,
       userName: seat.userName,
       emoji,
@@ -1120,36 +1293,63 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
   });
 
   // ---------- REBUY ----------
-  socket.on('player_rebuy', ({ clubId }, callback) => {
+  socket.on('player_rebuy', async ({ gameId, buyinAmount }, callback) => {
     try {
       const playerInfo = socketToPlayer.get(socket.id);
-      if (!playerInfo || playerInfo.clubId !== clubId) {
-        return callback && callback({ error: 'Not in this club' });
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
       }
 
-      const club = clubs.get(clubId);
-      if (!club) {
-        return callback && callback({ error: 'Club not found' });
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
       }
 
-      const seat = club.seats[playerInfo.seatIndex];
+      const seat = game.seats[playerInfo.seatIndex];
       if (!seat) {
         return callback && callback({ error: 'Not seated' });
       }
 
-      if (!club.tableSettings.allowRebuys) {
+      if (!game.tableSettings.allowRebuys) {
         return callback && callback({ error: 'Rebuys not allowed' });
       }
 
-      // Reset stack to starting stack
-      seat.stack = club.tableSettings.startingStack;
-      seat.isReady = false;
+      // Player can rebuy any amount between min and max buyin
+      const buyin = buyinAmount ? parseInt(buyinAmount) : game.minBuyin;
+      if (buyin < game.minBuyin || buyin > game.maxBuyin) {
+        return callback && callback({ error: `Rebuy must be between ${game.minBuyin} and ${game.maxBuyin}` });
+      }
+
+      // Deduct from bankroll
+      let newBankroll;
+      try {
+        newBankroll = await deductBankroll(socket.userId, buyin);
+      } catch (e) {
+        return callback && callback({ error: 'Insufficient bankroll for rebuy' });
+      }
+
+      seat.stack = buyin;
+      seat.isReady = true;
       seat.isConnected = true;
 
-      console.log(`[Rebuy] ${seat.userName} rebought for ${club.tableSettings.startingStack}`);
+      // Update player session
+      if (seat.sessionId) {
+        try {
+          await pool.query(
+            'UPDATE player_sessions SET current_stack = $1 WHERE id = $2',
+            [buyin, seat.sessionId]
+          );
+        } catch (dbErr) {
+          console.error('[DB] Error updating session stack:', dbErr.message);
+        }
+      }
 
-      broadcastClubState(clubId);
-      callback && callback(null, { success: true });
+      notifyBankroll(socket.userId, newBankroll);
+
+      console.log(`[Rebuy] ${seat.userName} rebought for ${buyin}`);
+
+      broadcastTableState(gameId);
+      callback && callback(null, { success: true, bankroll: newBankroll });
     } catch (err) {
       console.error('[Rebuy Error]', err);
       callback && callback({ error: 'Failed to process rebuy' });
@@ -1157,36 +1357,35 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
   });
 
   // ---------- ADD BOTS ----------
-  socket.on('add_bots', ({ clubId }, callback) => {
+  socket.on('add_bots', ({ gameId }, callback) => {
     try {
       const playerInfo = socketToPlayer.get(socket.id);
-      if (!playerInfo || playerInfo.clubId !== clubId) {
-        return callback && callback({ error: 'Not in this club' });
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
       }
 
-      const club = clubs.get(clubId);
-      if (!club) {
-        return callback && callback({ error: 'Club not found' });
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
       }
 
-      // Only host can add bots
-      if (playerInfo.userId !== club.hostId) {
+      if (playerInfo.userId !== game.hostId) {
         return callback && callback({ error: 'Only the host can add bots' });
       }
 
-      // Can only add bots when game is waiting
-      if (club.gameState !== 'WAITING') {
+      if (game.gameState !== 'WAITING') {
         return callback && callback({ error: 'Can only add bots before the game starts' });
       }
 
-      // Fill empty seats with bots
       let botsAdded = 0;
       for (let i = 0; i < MAX_SEATS; i++) {
-        if (club.seats[i] === null) {
-          club.seats[i] = {
+        if (game.seats[i] === null) {
+          // Bots buy in for the average of min/max
+          const botBuyin = Math.floor((game.minBuyin + game.maxBuyin) / 2);
+          game.seats[i] = {
             userId: `bot_${uuidv4()}`,
             userName: getNextBotName(),
-            stack: club.tableSettings.startingStack,
+            stack: botBuyin,
             isReady: true,
             isConnected: true,
             isSittingOut: false,
@@ -1196,12 +1395,10 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
         }
       }
 
-      console.log(`[Bots] Added ${botsAdded} bots to club ${clubId}`);
-      broadcastClubState(clubId);
-      
-      // Bots are auto-ready — check if game should start
-      checkAutoStart(clubId);
-      
+      console.log(`[Bots] Added ${botsAdded} bots to game ${gameId}`);
+      broadcastTableState(gameId);
+      checkAutoStart(gameId);
+
       callback && callback(null, { botsAdded });
     } catch (err) {
       console.error('[Add Bots Error]', err);
@@ -1210,41 +1407,38 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
   });
 
   // ---------- REMOVE BOTS ----------
-  socket.on('remove_bots', ({ clubId }, callback) => {
+  socket.on('remove_bots', ({ gameId }, callback) => {
     try {
       const playerInfo = socketToPlayer.get(socket.id);
-      if (!playerInfo || playerInfo.clubId !== clubId) {
-        return callback && callback({ error: 'Not in this club' });
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
       }
 
-      const club = clubs.get(clubId);
-      if (!club) {
-        return callback && callback({ error: 'Club not found' });
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
       }
 
-      // Only host can remove bots
-      if (playerInfo.userId !== club.hostId) {
+      if (playerInfo.userId !== game.hostId) {
         return callback && callback({ error: 'Only the host can remove bots' });
       }
 
-      // Can only remove bots when game is waiting
-      if (club.gameState !== 'WAITING') {
+      if (game.gameState !== 'WAITING') {
         return callback && callback({ error: 'Can only remove bots before the game starts' });
       }
 
-      // Remove all bot seats
       let botsRemoved = 0;
       for (let i = 0; i < MAX_SEATS; i++) {
-        if (club.seats[i] && club.seats[i].isBot) {
-          club.seats[i] = null;
+        if (game.seats[i] && game.seats[i].isBot) {
+          game.seats[i] = null;
           botsRemoved++;
         }
       }
 
       resetBotNames();
 
-      console.log(`[Bots] Removed ${botsRemoved} bots from club ${clubId}`);
-      broadcastClubState(clubId);
+      console.log(`[Bots] Removed ${botsRemoved} bots from game ${gameId}`);
+      broadcastTableState(gameId);
       callback && callback(null, { botsRemoved });
     } catch (err) {
       console.error('[Remove Bots Error]', err);
@@ -1253,30 +1447,29 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
   });
 
   // ---------- SIT OUT ----------
-  socket.on('player_sit_out', ({ clubId }, callback) => {
+  socket.on('player_sit_out', ({ gameId }, callback) => {
     try {
       const playerInfo = socketToPlayer.get(socket.id);
-      if (!playerInfo || playerInfo.clubId !== clubId) {
-        return callback && callback({ error: 'Not in this club' });
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
       }
 
-      const club = clubs.get(clubId);
-      if (!club) {
-        return callback && callback({ error: 'Club not found' });
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
       }
 
-      const seat = club.seats[playerInfo.seatIndex];
+      const seat = game.seats[playerInfo.seatIndex];
       if (!seat) {
         return callback && callback({ error: 'Not seated' });
       }
 
-      // Toggle sitting out
       seat.isSittingOut = !seat.isSittingOut;
       seat.isReady = false;
 
       console.log(`[Sit Out] ${seat.userName} ${seat.isSittingOut ? 'sitting out' : 'back in'}`);
 
-      broadcastClubState(clubId);
+      broadcastTableState(gameId);
       callback && callback(null, { success: true });
     } catch (err) {
       console.error('[Sit Out Error]', err);
@@ -1284,393 +1477,57 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
     }
   });
 
-  // ============================================================
-  // CHALLENGE SYSTEM
-  // ============================================================
-
-  // ---------- FIND USERS ----------
-  socket.on('find_users', async ({ query }, callback) => {
-    try {
-      if (!query || query.trim().length < 2) {
-        return callback({ error: 'Search query must be at least 2 characters' });
-      }
-
-      const search = `%${query.trim()}%`;
-      const result = await pool.query(
-        `SELECT id, display_name, avatar_color, total_wins, hands_played
-         FROM users
-         WHERE (email ILIKE $1 OR display_name ILIKE $1)
-          AND id != $2
-         LIMIT 10`,
-        [search, socket.userId]
-      );
-
-      const users = result.rows.map(u => ({
-        id: u.id,
-        displayName: u.display_name,
-        avatarColor: u.avatar_color,
-        totalWins: u.total_wins,
-        handsPlayed: u.hands_played,
-      }));
-
-      callback(null, { users });
-    } catch (err) {
-      console.error('[Find Users Error]', err);
-      callback({ error: 'Failed to search users' });
-    }
-  });
-
-  // ---------- GET MY CHALLENGES ----------
-  socket.on('get_my_challenges', async (data, callback) => {
-    try {
-      const myId = socket.userId;
-
-      const result = await pool.query(
-        `SELECT c.id, c.status, c.buy_in, c.blind_level, c.max_hands, c.created_at,
-                chal.id AS challenger_id, chal.display_name AS challenger_name, chal.avatar_color AS challenger_color,
-                chale.id AS challengee_id, chale.display_name AS challengee_name, chale.avatar_color AS challengee_color
-         FROM challenges c
-         JOIN users chal ON c.challenger_id = chal.id
-         JOIN users chale ON c.challengee_id = chale.id
-         WHERE (c.challenger_id = $1 OR c.challengee_id = $1)
-          AND c.status = 'pending'
-         ORDER BY c.created_at DESC
-         LIMIT 20`,
-        [myId]
-      );
-
-      const challenges = result.rows.map(row => ({
-        id: row.id,
-        status: row.status,
-        buyIn: row.buy_in,
-        blindLevel: row.blind_level,
-        maxHands: row.max_hands,
-        createdAt: row.created_at,
-        isIncoming: row.challengee_id === myId,
-        opponent: {
-          id: row.challenger_id === myId ? row.challengee_id : row.challenger_id,
-          displayName: row.challenger_id === myId ? row.challengee_name : row.challenger_name,
-          avatarColor: row.challenger_id === myId ? row.challengee_color : row.challenger_color,
-        },
-      }));
-
-      callback(null, { challenges });
-    } catch (err) {
-      console.error('[Get Challenges Error]', err);
-      callback({ error: 'Failed to get challenges' });
-    }
-  });
-
-  // ---------- SEND CHALLENGE ----------
-  socket.on('send_challenge', async ({ opponentId, buyIn, blindLevel, maxHands }, callback) => {
-    try {
-      if (!opponentId) {
-        return callback({ error: 'Opponent is required' });
-      }
-
-      // Check for existing pending challenge between these two
-      const existing = await pool.query(
-        `SELECT id FROM challenges
-         WHERE ((challenger_id = $1 AND challengee_id = $2) OR (challenger_id = $2 AND challengee_id = $1))
-          AND status = 'pending'`,
-        [socket.userId, opponentId]
-      );
-
-      if (existing.rows.length > 0) {
-        return callback({ error: 'You already have a pending challenge with this player' });
-      }
-
-      const result = await pool.query(
-        `INSERT INTO challenges (challenger_id, challengee_id, buy_in, blind_level, max_hands)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, status, buy_in, blind_level, max_hands, created_at`,
-        [socket.userId, opponentId, buyIn || 0, blindLevel || 20, maxHands || 0]
-      );
-
-      const challenge = result.rows[0];
-
-      // Get challenger info
-      const challengerResult = await pool.query(
-        'SELECT id, display_name, avatar_color FROM users WHERE id = $1',
-        [socket.userId]
-      );
-      const challenger = challengerResult.rows[0];
-
-      // Notify the opponent in real-time if connected
-      const opponentSocketId = userIdToSocket.get(opponentId);
-      if (opponentSocketId) {
-        io.to(opponentSocketId).emit('new_challenge', {
-          id: challenge.id,
-          status: challenge.status,
-          buyIn: challenge.buy_in,
-          blindLevel: challenge.blind_level,
-          maxHands: challenge.max_hands,
-          createdAt: challenge.created_at,
-          isIncoming: true,
-          opponent: {
-            id: challenger.id,
-            displayName: challenger.display_name,
-            avatarColor: challenger.avatar_color,
-          },
-        });
-      }
-
-      callback(null, {
-        id: challenge.id,
-        status: challenge.status,
-        buyIn: challenge.buy_in,
-        blindLevel: challenge.blind_level,
-        maxHands: challenge.max_hands,
-        createdAt: challenge.created_at,
-      });
-    } catch (err) {
-      console.error('[Send Challenge Error]', err);
-      callback({ error: 'Failed to send challenge' });
-    }
-  });
-
-  // ---------- ACCEPT CHALLENGE ----------
-  socket.on('accept_challenge', async ({ challengeId }, callback) => {
-    try {
-      if (!challengeId) {
-        return callback({ error: 'Challenge ID is required' });
-      }
-
-      const result = await pool.query(
-        `SELECT c.*, u.display_name AS challenger_name
-         FROM challenges c
-         JOIN users u ON c.challenger_id = u.id
-         WHERE c.id = $1 AND c.status = 'pending'`,
-        [challengeId]
-      );
-
-      if (result.rows.length === 0) {
-        return callback({ error: 'Challenge not found or already resolved' });
-      }
-
-      const challenge = result.rows[0];
-
-      // Only the challengee can accept
-      if (challenge.challengee_id !== socket.userId) {
-        return callback({ error: 'Only the challenged player can accept' });
-      }
-
-      // Update challenge status
-      await pool.query(
-        'UPDATE challenges SET status = $1 WHERE id = $2',
-        ['accepted', challengeId]
-      );
-
-      // Create a club room for the two players
-      const inviteCode = generateInviteCode();
-      const clubId = uuidv4();
-
-      // Create club seats: challenger at seat 0, challengee at seat 1
-      const clubState = createClubState(challenge.challenger_id, challenge.challenger_name, inviteCode);
-      clubState.id = clubId;
-
-      // Add the challengee to seat 1
-      const challengeeResult = await pool.query(
-        'SELECT display_name FROM users WHERE id = $1',
-        [challenge.challengee_id]
-      );
-      const challengeeName = challengeeResult.rows[0]?.display_name || 'Player';
-
-      clubState.seats[1] = {
-        userId: challenge.challengee_id,
-        userName: challengeeName,
-        stack: clubState.tableSettings.startingStack,
-        isReady: true,
-        isConnected: true,
-        isSittingOut: false,
-      };
-
-      clubs.set(clubId, clubState);
-
-      // Persist club to DB
-      try {
-        await pool.query(
-          `INSERT INTO clubs (id, invite_code, host_user_id, small_blind, big_blind, starting_stack, action_timer_seconds, allow_rebuys)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [clubId, inviteCode, challenge.challenger_id,
-           clubState.tableSettings.sb, clubState.tableSettings.bb,
-           clubState.tableSettings.startingStack, clubState.tableSettings.timer, clubState.tableSettings.allowRebuys]
-        );
-      } catch (dbErr) {
-        console.error('[DB] Error persisting challenge club:', dbErr.message);
-      }
-
-      // Link challenge to club
-      await pool.query(
-        'UPDATE challenges SET club_id = $1 WHERE id = $2',
-        [clubId, challengeId]
-      );
-
-      // Join the challenger's socket to the room
-      const challengerSocketId = userIdToSocket.get(challenge.challenger_id);
-      if (challengerSocketId) {
-        const challengerSocket = io.sockets.sockets.get(challengerSocketId);
-        if (challengerSocket) {
-          challengerSocket.join(clubRoom(clubId));
-          socketToPlayer.set(challengerSocketId, { clubId, userId: challenge.challenger_id, seatIndex: 0 });
-          // Notify challenger
-          io.to(challengerSocketId).emit('challenge_accepted', {
-            clubId,
-            inviteCode,
-            userId: challenge.challenger_id,
-            seatIndex: 0,
-          });
-        }
-      }
-
-      // Join the challengee's socket to the room
-      socket.join(clubRoom(clubId));
-      socketToPlayer.set(socket.id, { clubId, userId: challenge.challengee_id, seatIndex: 1 });
-
-      // Start the game immediately (both are ready)
-      let handCount = handCounters.get(clubId) || 0;
-      const hand = createHand(clubState, handCount);
-      if (hand) {
-        startHand(hand);
-        clubState.currentHand = hand;
-        clubState.gameState = hand.gameStatus;
-        handCounters.set(clubId, handCount + 1);
-        broadcastGameState(clubId);
-        setActionTimer(clubId);
-      }
-
-      // Return club data to the challengee
-      callback(null, {
-        clubId,
-        inviteCode,
-        userId: challenge.challengee_id,
-        seatIndex: 1,
-        autoStarted: true,
-      });
-
-      console.log(`[Challenge] Accepted! Club ${clubId} created for ${challenge.challenger_name} vs ${challengeeName}`);
-    } catch (err) {
-      console.error('[Accept Challenge Error]', err);
-      callback({ error: 'Failed to accept challenge' });
-    }
-  });
-
-  // ---------- REJECT CHALLENGE ----------
-  socket.on('reject_challenge', async ({ challengeId }, callback) => {
-    try {
-      if (!challengeId) {
-        return callback({ error: 'Challenge ID is required' });
-      }
-
-      const result = await pool.query(
-        `SELECT c.* FROM challenges c WHERE c.id = $1 AND c.status = 'pending' AND c.challengee_id = $2`,
-        [challengeId, socket.userId]
-      );
-
-      if (result.rows.length === 0) {
-        return callback({ error: 'Challenge not found or already resolved' });
-      }
-
-      await pool.query(
-        'UPDATE challenges SET status = $1 WHERE id = $2',
-        ['rejected', challengeId]
-      );
-
-      // Notify the challenger
-      const challengerSocketId = userIdToSocket.get(result.rows[0].challenger_id);
-      if (challengerSocketId) {
-        io.to(challengerSocketId).emit('challenge_rejected', { challengeId });
-      }
-
-      callback(null, { success: true });
-    } catch (err) {
-      console.error('[Reject Challenge Error]', err);
-      callback({ error: 'Failed to reject challenge' });
-    }
-  });
-
-  // ---------- CANCEL CHALLENGE ----------
-  socket.on('cancel_challenge', async ({ challengeId }, callback) => {
-    try {
-      if (!challengeId) {
-        return callback({ error: 'Challenge ID is required' });
-      }
-
-      const result = await pool.query(
-        `SELECT c.* FROM challenges c WHERE c.id = $1 AND c.status = 'pending' AND c.challenger_id = $2`,
-        [challengeId, socket.userId]
-      );
-
-      if (result.rows.length === 0) {
-        return callback({ error: 'Challenge not found or already resolved' });
-      }
-
-      await pool.query(
-        'UPDATE challenges SET status = $1 WHERE id = $2',
-        ['cancelled', challengeId]
-      );
-
-      callback(null, { success: true });
-    } catch (err) {
-      console.error('[Cancel Challenge Error]', err);
-      callback({ error: 'Failed to cancel challenge' });
-    }
-  });
-
   // ---------- DISCONNECT ----------
   socket.on('disconnect', () => {
-    // Clean up user tracking
     userIdToSocket.delete(socket.userId);
 
     const playerInfo = socketToPlayer.get(socket.id);
     if (playerInfo) {
-      const { clubId, userId, seatIndex } = playerInfo;
-      const club = clubs.get(clubId);
+      const { gameId, userId, seatIndex } = playerInfo;
+      const game = ringGames.get(gameId);
 
-      if (club) {
-        const seat = club.seats[seatIndex];
+      if (game) {
+        const seat = game.seats[seatIndex];
         if (seat && seat.userId === userId) {
           seat.isConnected = false;
-          console.log(`[Disconnect] ${seat.userName} disconnected from club ${clubId}`);
+          console.log(`[Disconnect] ${seat.userName} disconnected from game ${gameId}`);
 
-          // If a game is in progress, set a timeout to auto-fold after 60 seconds
-          if (club.currentHand && club.gameState !== 'WAITING') {
-            const timeoutKey = `${clubId}:${userId}`;
-            
-            // Clear any existing timeout for this player
+          if (game.currentHand && game.gameState !== 'WAITING') {
+            const timeoutKey = `${gameId}:${userId}`;
+
             if (disconnectTimeouts.has(timeoutKey)) {
               clearTimeout(disconnectTimeouts.get(timeoutKey));
             }
 
             const disconnectTimeout = setTimeout(() => {
-              const hand = club.currentHand;
+              const hand = game.currentHand;
               if (hand && hand.gameStatus !== 'WAITING' && hand.gameStatus !== GAME_STATES.SHOWDOWN && hand.gameStatus !== GAME_STATES.HAND_COMPLETE) {
                 const playerInHand = hand.players.find(p => p.seatIndex === seatIndex);
                 if (playerInHand && !playerInHand.isFolded && !playerInHand.isAllIn) {
-                  clearActionTimer(clubId);
+                  clearActionTimer(gameId);
                   const result = handleAction(hand, seatIndex, 'fold');
                   if (!result.error) {
                     console.log(`[Auto-Fold] ${seat.userName} folded due to disconnect timeout`);
                     if (seat) seat.isSittingOut = true;
-                    club.gameState = hand.gameStatus;
+                    game.gameState = hand.gameStatus;
                     for (const hp of hand.players) {
-                      const s = club.seats[hp.seatIndex];
+                      const s = game.seats[hp.seatIndex];
                       if (s) s.stack = hp.stack;
                     }
-                    broadcastGameState(clubId);
+                    broadcastGameState(gameId);
                     if (!isHandComplete(hand)) {
-                      setActionTimer(clubId);
+                      setActionTimer(gameId);
                     }
                   }
                 }
               }
               disconnectTimeouts.delete(timeoutKey);
             }, 60000);
-            
+
             disconnectTimeouts.set(timeoutKey, disconnectTimeout);
           }
 
-          broadcastClubState(clubId);
+          broadcastTableState(gameId);
         }
       }
 
@@ -1687,7 +1544,7 @@ ChallengeTracker.init(io, userIdToSocket).catch(err => {
   console.error('[Challenges] Failed to initialize tracker:', err.message);
 });
 
-// Graceful shutdown: flush pending progress
+// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('[Server] Shutting down...');
   ChallengeTracker.shutdown();

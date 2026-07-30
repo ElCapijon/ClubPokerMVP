@@ -5,15 +5,17 @@ async function migrate() {
   try {
     await client.query('BEGIN');
 
-    // Drop old tables if they exist (for clean migration)
+    // Drop old tables (clean migration)
     await client.query(`DROP TABLE IF EXISTS user_challenge_progress CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS challenge_definitions CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS challenges CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS hand_histories CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS clubs CASCADE;`);
+    await client.query(`DROP TABLE IF EXISTS player_sessions CASCADE;`);
+    await client.query(`DROP TABLE IF EXISTS ring_games CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS users CASCADE;`);
 
-    // Users table with credentials
+    // ─── Users table with bankroll ─────────────────────────
     await client.query(`
       CREATE TABLE users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -21,32 +23,48 @@ async function migrate() {
         display_name VARCHAR(20) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         avatar_color VARCHAR(7) DEFAULT '#FFD700',
+        bankroll BIGINT NOT NULL DEFAULT 10000,
         total_wins INT DEFAULT 0,
         hands_played INT DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    // Clubs / Rooms
+    // ─── Ring Games (cash game tables) ─────────────────────
     await client.query(`
-      CREATE TABLE clubs (
+      CREATE TABLE ring_games (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        invite_code VARCHAR(6) UNIQUE NOT NULL,
+        table_name VARCHAR(30) NOT NULL,
         host_user_id UUID REFERENCES users(id),
-        small_blind INT DEFAULT 10,
-        big_blind INT DEFAULT 20,
-        starting_stack INT DEFAULT 1500,
-        action_timer_seconds INT DEFAULT 20,
-        allow_rebuys BOOLEAN DEFAULT true,
+        min_buyin INT NOT NULL DEFAULT 50,
+        max_buyin INT NOT NULL DEFAULT 1000,
+        small_blind INT NOT NULL DEFAULT 10,
+        big_blind INT NOT NULL DEFAULT 20,
+        action_timer_seconds INT NOT NULL DEFAULT 20,
+        max_players INT NOT NULL DEFAULT 6,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    // Hand Histories (for replay later)
+    // ─── Player Sessions (tracks active seat at a table) ───
+    await client.query(`
+      CREATE TABLE player_sessions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        game_id UUID REFERENCES ring_games(id) ON DELETE CASCADE,
+        buyin_amount INT NOT NULL,
+        current_stack INT NOT NULL,
+        joined_at TIMESTAMP DEFAULT NOW(),
+        left_at TIMESTAMP
+      );
+    `);
+
+    // ─── Hand Histories (for replay later) ─────────────────
     await client.query(`
       CREATE TABLE hand_histories (
         id SERIAL PRIMARY KEY,
-        club_id UUID REFERENCES clubs(id),
+        game_id UUID REFERENCES ring_games(id),
         final_board JSONB,
         players_in_hand JSONB,
         pot_splits JSONB,
@@ -54,23 +72,7 @@ async function migrate() {
       );
     `);
 
-    // Challenge Requests Table
-    await client.query(`
-      CREATE TABLE challenges (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        challenger_id UUID REFERENCES users(id) ON DELETE CASCADE,
-        challengee_id UUID REFERENCES users(id) ON DELETE CASCADE,
-        status VARCHAR(20) DEFAULT 'pending',
-        buy_in INT DEFAULT 0,
-        blind_level INT DEFAULT 20,
-        max_hands INT DEFAULT 0,
-        winner_id UUID REFERENCES users(id),
-        club_id UUID REFERENCES clubs(id),
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-    `);
-
-    // Challenge Definitions — stat-driven milestone system
+    // ─── Challenge Definitions (achievement milestones) ────
     await client.query(`
       CREATE TABLE challenge_definitions (
         id SERIAL PRIMARY KEY,
@@ -83,7 +85,7 @@ async function migrate() {
       );
     `);
 
-    // User Challenge Progress
+    // ─── User Challenge Progress ───────────────────────────
     await client.query(`
       CREATE TABLE user_challenge_progress (
         user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -96,8 +98,9 @@ async function migrate() {
       );
     `);
 
-    // ─── Seed 70+ Milestone Quests ─────────────────────────
-    // Format: (stat, name, description, target_value, reward_badge)
+    // ═══════════════════════════════════════════════════════════
+    // SEED DATA: Milestone Quests
+    // ═══════════════════════════════════════════════════════════
 
     // Hands Played (9 milestones)
     await client.query(`INSERT INTO challenge_definitions (stat, name, description, target_value, reward_badge) VALUES
@@ -218,9 +221,11 @@ async function migrate() {
 
     await client.query('COMMIT');
     console.log('Migration completed successfully!');
-    console.log('Tables created: users, clubs, hand_histories, challenges, challenge_definitions, user_challenge_progress');
+    console.log('Tables created: users, ring_games, player_sessions, hand_histories, challenge_definitions, user_challenge_progress');
     console.log('Seed data: 72 milestone challenge definitions inserted');
-    return { tables: ['users', 'clubs', 'hand_histories', 'challenges', 'challenge_definitions', 'user_challenge_progress'] };
+    return {
+      tables: ['users', 'ring_games', 'player_sessions', 'hand_histories', 'challenge_definitions', 'user_challenge_progress'],
+    };
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);
@@ -233,7 +238,7 @@ async function migrate() {
   }
 }
 
-// Auto-run when called directly via `node migrate.js`
+// Auto-run when called directly
 if (require.main === module) {
   migrate().catch((err) => {
     console.error('Migration failed:', err);

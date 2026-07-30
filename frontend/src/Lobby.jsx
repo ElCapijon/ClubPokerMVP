@@ -1,505 +1,532 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { connect, getSocket } from './socket';
 
-// ─── Challenge Panel Component ──────────────────────────────
-function ChallengePanel({ onEnterChallengeClub }) {
-  const [incomingChallenges, setIncomingChallenges] = useState([]);
-  const [outgoingChallenges, setOutgoingChallenges] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [searching, setSearching] = useState(false);
+// ─── Create Table Modal ─────────────────────────────────────
+function CreateTableModal({ onClose, onCreate }) {
+  const [tableName, setTableName] = useState('');
+  const [minBuyin, setMinBuyin] = useState(50);
+  const [maxBuyin, setMaxBuyin] = useState(1000);
+  const [smallBlind, setSmallBlind] = useState(10);
+  const [bigBlind, setBigBlind] = useState(20);
+  const [actionTimer, setActionTimer] = useState(20);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const searchTimeout = useRef(null);
 
-  // Load pending challenges on mount
-  useEffect(() => {
+  const handleCreate = async () => {
+    setError('');
+    if (!tableName.trim()) { setError('Table name is required'); return; }
+    if (minBuyin < 50) { setError('Minimum buy-in is 50 chips'); return; }
+    if (maxBuyin > 50000000) { setError('Maximum buy-in is 50,000,000 chips'); return; }
+    if (minBuyin > maxBuyin) { setError('Min buy-in cannot exceed max buy-in'); return; }
+    if (smallBlind < 1 || bigBlind < 2) { setError('Invalid blind amounts'); return; }
+    if (tableName.trim().length > 30) { setError('Table name must be 30 characters or less'); return; }
+
+    setLoading(true);
     const socket = getSocket();
-    if (!socket) return;
-
-    socket.emit('get_my_challenges', {}, (err, data) => {
-      if (err) return;
-      const incoming = data.challenges.filter(c => c.isIncoming);
-      const outgoing = data.challenges.filter(c => !c.isIncoming);
-      setIncomingChallenges(incoming);
-      setOutgoingChallenges(outgoing);
-    });
-
-    // Listen for real-time challenge events
-    const onNewChallenge = (challenge) => {
-      setIncomingChallenges(prev => {
-        if (prev.some(c => c.id === challenge.id)) return prev;
-        return [challenge, ...prev];
-      });
-    };
-
-    const onChallengeAccepted = (data) => {
-      onEnterChallengeClub(data);
-    };
-
-    const onChallengeRejected = ({ challengeId }) => {
-      setOutgoingChallenges(prev =>
-        prev.filter(c => c.id !== challengeId)
-      );
-    };
-
-    socket.on('new_challenge', onNewChallenge);
-    socket.on('challenge_accepted', onChallengeAccepted);
-    socket.on('challenge_rejected', onChallengeRejected);
-
-    return () => {
-      socket.off('new_challenge', onNewChallenge);
-      socket.off('challenge_accepted', onChallengeAccepted);
-      socket.off('challenge_rejected', onChallengeRejected);
-    };
-  }, [onEnterChallengeClub]);
-
-  // Debounced user search
-  const handleSearch = useCallback((query) => {
-    setSearchQuery(query);
-    if (searchTimeout.current) clearTimeout(searchTimeout.current);
-
-    if (query.trim().length < 2) {
-      setSearchResults([]);
+    if (!socket) {
+      setError('Not connected');
+      setLoading(false);
       return;
     }
 
-    searchTimeout.current = setTimeout(() => {
-      setSearching(true);
-      const socket = getSocket();
-      if (!socket) return;
-      socket.emit('find_users', { query: query.trim() }, (err, data) => {
-        setSearching(false);
-        if (err) return;
-        setSearchResults(data.users || []);
-      });
-    }, 400);
-  }, []);
-
-  const handleSendChallenge = useCallback((opponentId) => {
-    const socket = getSocket();
-    if (!socket) return;
-    socket.emit('send_challenge', {
-      opponentId,
-      buyIn: 0,
-      blindLevel: 20,
-      maxHands: 0,
+    socket.emit('create_ring_game', {
+      tableName: tableName.trim(),
+      minBuyin,
+      maxBuyin,
+      smallBlind,
+      bigBlind,
+      actionTimer,
     }, (err, data) => {
-      if (err) {
-        setError(err.error || 'Failed to send challenge');
-        return;
-      }
-      setOutgoingChallenges(prev => {
-        if (prev.some(c => c.id === data.id)) return prev;
-        const opponent = searchResults.find(u => u.id === opponentId);
-        return [{
-          id: data.id,
-          status: data.status,
-          buyIn: data.buyIn,
-          blindLevel: data.blindLevel,
-          maxHands: data.maxHands,
-          createdAt: data.createdAt,
-          isIncoming: false,
-          opponent: opponent || { id: opponentId, displayName: 'User' },
-        }, ...prev];
-      });
-      setSearchQuery('');
-      setSearchResults([]);
+      setLoading(false);
+      if (err) { setError(err.error || 'Failed to create table'); return; }
+      onCreate(data);
     });
-  }, [searchResults]);
-
-  const handleAcceptChallenge = useCallback((challengeId) => {
-    const socket = getSocket();
-    if (!socket) return;
-    socket.emit('accept_challenge', { challengeId }, (err, data) => {
-      if (err) {
-        setError(err.error || 'Failed to accept challenge');
-        return;
-      }
-      setIncomingChallenges(prev => prev.filter(c => c.id !== challengeId));
-      onEnterChallengeClub(data);
-    });
-  }, [onEnterChallengeClub]);
-
-  const handleRejectChallenge = useCallback((challengeId) => {
-    const socket = getSocket();
-    if (!socket) return;
-    socket.emit('reject_challenge', { challengeId }, (err) => {
-      if (err) return;
-      setIncomingChallenges(prev => prev.filter(c => c.id !== challengeId));
-    });
-  }, []);
-
-  const handleCancelChallenge = useCallback((challengeId) => {
-    const socket = getSocket();
-    if (!socket) return;
-    socket.emit('cancel_challenge', { challengeId }, (err) => {
-      if (err) return;
-      setOutgoingChallenges(prev => prev.filter(c => c.id !== challengeId));
-    });
-  }, []);
+  };
 
   return (
-    <div className="space-y-4 animate-slide-up">
-      {/* ── Find Players ── */}
-      <div className="bg-gray-900/70 backdrop-blur-sm rounded-2xl border border-gray-800 p-4">
-        <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-          <span>🔍</span> Find Players
-        </h3>
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => handleSearch(e.target.value)}
-          placeholder="Search by email or display name..."
-          className="input-field text-sm"
-        />
-        {searching && (
-          <p className="text-xs text-gray-500 mt-1">Searching...</p>
-        )}
-        {searchResults.length > 0 && (
-          <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
-            {searchResults.map(user => (
-              <div key={user.id}
-                className="flex items-center justify-between bg-gray-800/50 rounded-xl px-3 py-2 hover:bg-gray-800 transition-colors"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
-                    style={{ backgroundColor: user.avatarColor || '#FFD700' }}
-                  >
-                    {user.displayName.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{user.displayName}</p>
-                    <p className="text-[10px] text-gray-500">
-                      {user.totalWins || 0} wins · {user.handsPlayed || 0} hands
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleSendChallenge(user.id)}
-                  className="shrink-0 px-3 py-1.5 bg-gradient-to-r from-poker-gold to-yellow-500 text-black text-xs font-bold rounded-lg hover:from-yellow-400 hover:to-yellow-300 transition-all active:scale-95"
-                >
-                  Challenge
-                </button>
-              </div>
-            ))}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 w-full max-w-md animate-slide-up shadow-2xl">
+        <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+          <span>🎲</span> Create Table
+        </h2>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Table Name</label>
+            <input type="text" value={tableName}
+              onChange={(e) => setTableName(e.target.value.slice(0, 30))}
+              placeholder="e.g. High Rollers" maxLength={30}
+              className="input-field text-sm" autoFocus />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Min Buy-in</label>
+              <input type="number" value={minBuyin}
+                onChange={(e) => setMinBuyin(Math.max(50, parseInt(e.target.value) || 50))}
+                min={50} max={50000000}
+                className="input-field text-sm" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Max Buy-in</label>
+              <input type="number" value={maxBuyin}
+                onChange={(e) => setMaxBuyin(Math.min(50000000, parseInt(e.target.value) || 1000))}
+                min={50} max={50000000}
+                className="input-field text-sm" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Small Blind</label>
+              <input type="number" value={smallBlind}
+                onChange={(e) => setSmallBlind(Math.max(1, parseInt(e.target.value) || 1))}
+                min={1} className="input-field text-sm" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Big Blind</label>
+              <input type="number" value={bigBlind}
+                onChange={(e) => setBigBlind(Math.max(2, parseInt(e.target.value) || 2))}
+                min={2} className="input-field text-sm" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Action Timer: {actionTimer}s
+            </label>
+            <input type="range" value={actionTimer}
+              onChange={(e) => setActionTimer(parseInt(e.target.value))}
+              min={10} max={60} step={5}
+              className="bet-slider w-full" />
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-3 bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
+            <span>⚠️ {error}</span>
           </div>
         )}
-        {searchQuery.length >= 2 && searchResults.length === 0 && !searching && (
-          <p className="text-xs text-gray-500 mt-1">No users found</p>
-        )}
+
+        <div className="flex gap-2 mt-5">
+          <button onClick={onClose}
+            className="flex-1 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-sm font-semibold hover:bg-gray-700 transition-all active:scale-95">
+            Cancel
+          </button>
+          <button onClick={handleCreate} disabled={loading}
+            className="flex-1 py-2.5 bg-gradient-to-r from-poker-gold to-yellow-500 text-black rounded-xl text-sm font-bold hover:from-yellow-400 hover:to-yellow-300 transition-all active:scale-95 disabled:opacity-50">
+            {loading ? (
+              <span className="inline-block w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+            ) : 'Create Table'}
+          </button>
+        </div>
       </div>
-
-      {/* ── Incoming Challenges ── */}
-      {incomingChallenges.length > 0 && (
-        <div className="bg-gray-900/70 backdrop-blur-sm rounded-2xl border border-poker-gold/20 p-4">
-          <h3 className="text-sm font-semibold text-poker-gold mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 bg-poker-gold rounded-full animate-pulse" />
-            Incoming Challenges ({incomingChallenges.length})
-          </h3>
-          <div className="space-y-2">
-            {incomingChallenges.map(challenge => (
-              <div key={challenge.id}
-                className="flex items-center justify-between bg-gray-800/50 rounded-xl px-3 py-2.5"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
-                    style={{ backgroundColor: challenge.opponent?.avatarColor || '#6366f1' }}
-                  >
-                    {challenge.opponent?.displayName?.charAt(0).toUpperCase() || '?'}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-white truncate">
-                      {challenge.opponent?.displayName || 'Unknown'}
-                    </p>
-                    <p className="text-[10px] text-gray-500">
-                      {challenge.blindLevel ? `BB ${challenge.blindLevel}` : 'Default stakes'}
-                      {challenge.maxHands > 0 ? ` · Best of ${challenge.maxHands}` : ''}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    onClick={() => handleAcceptChallenge(challenge.id)}
-                    className="px-3 py-1.5 bg-gradient-to-r from-green-600 to-green-500 text-white text-xs font-bold rounded-lg hover:from-green-500 hover:to-green-400 transition-all active:scale-95"
-                  >
-                    Accept
-                  </button>
-                  <button
-                    onClick={() => handleRejectChallenge(challenge.id)}
-                    className="px-3 py-1.5 bg-gray-700 text-gray-300 text-xs rounded-lg hover:bg-gray-600 transition-all active:scale-95"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Outgoing Challenges ── */}
-      {outgoingChallenges.length > 0 && (
-        <div className="bg-gray-900/70 backdrop-blur-sm rounded-2xl border border-gray-800 p-4">
-          <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-            <span>📤</span> Sent Challenges ({outgoingChallenges.length})
-          </h3>
-          <div className="space-y-2">
-            {outgoingChallenges.map(challenge => (
-              <div key={challenge.id}
-                className="flex items-center justify-between bg-gray-800/50 rounded-xl px-3 py-2.5"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
-                    style={{ backgroundColor: challenge.opponent?.avatarColor || '#6366f1' }}
-                  >
-                    {challenge.opponent?.displayName?.charAt(0).toUpperCase() || '?'}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-white truncate">
-                      {challenge.opponent?.displayName || 'Unknown'}
-                    </p>
-                    <p className="text-[10px] text-gray-400">
-                      <span className="text-yellow-400">Pending</span>
-                      {challenge.blindLevel ? ` · BB ${challenge.blindLevel}` : ''}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleCancelChallenge(challenge.id)}
-                  className="px-3 py-1.5 bg-gray-700 text-gray-300 text-xs rounded-lg hover:bg-gray-600 transition-all active:scale-95"
-                >
-                  Cancel
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Error display */}
-      {error && (
-        <div className="bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
-          <span>⚠️ {error}</span>
-        </div>
-      )}
     </div>
   );
 }
 
-// ─── Main Lobby Component ──────────────────────────────────
-export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
-  const [mode, setMode] = useState(null); // null | 'create' | 'join' | 'challenges'
-  const [inviteCode, setInviteCode] = useState('');
+// ─── Join Table Modal ───────────────────────────────────────
+function JoinTableModal({ game, bankroll, onClose, onJoin }) {
+  const [buyinAmount, setBuyinAmount] = useState(game?.minBuyin || 50);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleEnterChallengeClub = useCallback((data) => {
-    // Called when a challenge is accepted - navigates to club room
-    if (data.clubId && data.userId && data.seatIndex !== undefined) {
-      onEnterClub(data, displayName);
+  useEffect(() => {
+    if (game) {
+      setBuyinAmount(Math.min(Math.max(bankroll, game.minBuyin), game.maxBuyin));
     }
-  }, [onEnterClub, displayName]);
+  }, [game, bankroll]);
 
-  const handleCreateClub = async () => {
+  const handleJoin = async () => {
     setError('');
-    setLoading(true);
+    if (buyinAmount < game.minBuyin || buyinAmount > game.maxBuyin) {
+      setError(`Buy-in must be between ${game.minBuyin.toLocaleString()} and ${game.maxBuyin.toLocaleString()} chips`);
+      return;
+    }
+    if (buyinAmount > bankroll) {
+      setError('Insufficient bankroll');
+      return;
+    }
 
-    const socket = connect();
+    setLoading(true);
+    const socket = getSocket();
     if (!socket) {
-      setError('Not authenticated. Please log in again.');
+      setError('Not connected');
       setLoading(false);
       return;
     }
 
-    socket.emit('create_club', {}, (err, data) => {
+    socket.emit('join_ring_game', {
+      gameId: game.id,
+      buyinAmount,
+    }, (err, data) => {
       setLoading(false);
-      if (err) {
-        setError(err.error || 'Failed to create club');
-        return;
-      }
-      onEnterClub(data, displayName);
+      if (err) { setError(err.error || 'Failed to join'); return; }
+      onJoin(data);
     });
   };
 
-  const handleJoinClub = async () => {
-    if (!inviteCode.trim()) {
-      setError('Please enter an invite code');
-      return;
-    }
-    setError('');
-    setLoading(true);
+  if (!game) return null;
 
-    const socket = connect();
-    if (!socket) {
-      setError('Not authenticated. Please log in again.');
-      setLoading(false);
-      return;
-    }
+  const canAfford = buyinAmount <= bankroll;
+  const buyinRange = `${game.minBuyin.toLocaleString()} - ${game.maxBuyin.toLocaleString()}`;
 
-    socket.emit('join_club', { inviteCode: inviteCode.trim() }, (err, data) => {
-      setLoading(false);
-      if (err) {
-        setError(err.error || 'Failed to join club');
-        return;
-      }
-      onEnterClub(data, displayName);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 w-full max-w-sm animate-slide-up shadow-2xl">
+        <h2 className="text-lg font-bold text-white mb-1">Join Table</h2>
+        <p className="text-sm text-gray-400 mb-4">{game.tableName}</p>
+
+        <div className="bg-gray-800/50 rounded-xl p-3 mb-4 space-y-1.5">
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-400">Blinds</span>
+            <span className="text-white font-mono">{game.smallBlind}/{game.bigBlind}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-400">Buy-in Range</span>
+            <span className="text-white font-mono">{buyinRange}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-400">Players</span>
+            <span className="text-white">{game.seatedCount}/6</span>
+          </div>
+          <div className="flex justify-between text-sm border-t border-gray-700 pt-1.5 mt-1.5">
+            <span className="text-gray-400">Your Bankroll</span>
+            <span className={`font-mono font-bold ${canAfford ? 'text-poker-gold' : 'text-red-400'}`}>
+              {bankroll.toLocaleString()} chips
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Buy-in Amount</label>
+          <div className="flex gap-2">
+            <input type="number" value={buyinAmount}
+              onChange={(e) => setBuyinAmount(Math.min(Math.max(parseInt(e.target.value) || game.minBuyin, game.minBuyin), game.maxBuyin))}
+              min={game.minBuyin} max={Math.min(game.maxBuyin, bankroll)}
+              className="input-field text-sm flex-1" />
+          </div>
+          <div className="flex gap-1.5 mt-2">
+            {[game.minBuyin, Math.floor((game.minBuyin + game.maxBuyin) / 2), game.maxBuyin].filter((v, i, a) => a.indexOf(v) === i).map(amount => (
+              <button key={amount}
+                onClick={() => setBuyinAmount(Math.min(amount, bankroll))}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                  buyinAmount === amount
+                    ? 'bg-poker-gold text-black'
+                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                }`}>
+                {amount.toLocaleString()}
+              </button>
+            ))}
+            {bankroll > game.maxBuyin && (
+              <button onClick={() => setBuyinAmount(game.maxBuyin)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                  buyinAmount === game.maxBuyin
+                    ? 'bg-poker-gold text-black'
+                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                }`}>
+                Max
+              </button>
+            )}
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-3 bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
+            <span>⚠️ {error}</span>
+          </div>
+        )}
+
+        <div className="flex gap-2 mt-5">
+          <button onClick={onClose}
+            className="flex-1 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-sm font-semibold hover:bg-gray-700 transition-all active:scale-95">
+            Cancel
+          </button>
+          <button onClick={handleJoin} disabled={loading || !canAfford}
+            className="flex-1 py-2.5 bg-gradient-to-r from-green-600 to-green-500 text-white rounded-xl text-sm font-bold
+                       hover:from-green-500 hover:to-green-400 transition-all active:scale-95
+                       disabled:opacity-50 disabled:cursor-not-allowed">
+            {loading ? (
+              <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : 'Buy In & Sit'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Table Card ──────────────────────────────────────────────
+function TableCard({ game, bankroll, onJoin }) {
+  const blindText = `${game.smallBlind}/${game.bigBlind}`;
+  const buyinText = `${game.minBuyin.toLocaleString()} - ${game.maxBuyin.toLocaleString()}`;
+  const fillPercent = (game.seatedCount / 6) * 100;
+  const canAfford = game.minBuyin <= bankroll;
+  const isInProgress = game.gameState !== 'WAITING';
+
+  // Generate a consistent color based on table name
+  const colors = ['from-blue-600 to-blue-800', 'from-purple-600 to-purple-800', 'from-emerald-600 to-emerald-800',
+    'from-rose-600 to-rose-800', 'from-amber-600 to-amber-800', 'from-cyan-600 to-cyan-800'];
+  const colorIdx = game.tableName.length % colors.length;
+
+  return (
+    <div className={`relative bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden transition-all duration-200
+      hover:border-gray-700 hover:shadow-lg hover:shadow-black/20 group cursor-pointer
+      ${!canAfford ? 'opacity-60' : ''}`}
+      onClick={() => canAfford && onJoin(game)}
+    >
+      {/* Top gradient bar */}
+      <div className={`h-2 bg-gradient-to-r ${colors[colorIdx]}`} />
+
+      <div className="p-4">
+        {/* Table name & status */}
+        <div className="flex items-start justify-between mb-3">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-bold text-white truncate">{game.tableName}</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {blindText} blinds
+            </p>
+          </div>
+          {isInProgress && (
+            <span className="shrink-0 px-2 py-0.5 bg-green-500/20 text-green-400 text-[10px] rounded-full font-medium">
+              Live
+            </span>
+          )}
+        </div>
+
+        {/* Player count bar */}
+        <div className="mb-3">
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-gray-400">Players</span>
+            <span className={`font-medium ${game.seatedCount >= 6 ? 'text-red-400' : 'text-white'}`}>
+              {game.seatedCount}/6
+            </span>
+          </div>
+          <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <div className={`h-full rounded-full transition-all duration-500 ${colors[colorIdx].replace('from-', 'bg-').split(' ')[0].replace('from-', 'bg-')}`}
+              style={{ width: `${fillPercent}%` }} />
+          </div>
+        </div>
+
+        {/* Buy-in range */}
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-gray-500">Buy-in</span>
+          <span className="text-gray-300 font-mono">{buyinText}</span>
+        </div>
+
+        {/* Join overlay on hover */}
+        {canAfford && (
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 rounded-2xl">
+            <span className="px-4 py-2 bg-gradient-to-r from-green-600 to-green-500 text-white rounded-xl text-sm font-bold shadow-lg">
+              {isInProgress ? 'Sit In' : 'Join Table'}
+            </span>
+          </div>
+        )}
+
+        {!canAfford && (
+          <div className="mt-2 text-[10px] text-red-400/70">
+            Bankroll too low for this table
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ====================================================================
+// MAIN LOBBY COMPONENT
+// ====================================================================
+export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
+  const [tables, setTables] = useState([]);
+  const [bankroll, setBankroll] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [joinTarget, setJoinTarget] = useState(null);
+  const [error, setError] = useState('');
+  const pollRef = useRef(null);
+
+  // Fetch bankroll & tables on mount
+  const fetchBankrollAndTables = useCallback(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    socket.emit('get_bankroll', {}, (err, data) => {
+      if (!err && data) setBankroll(data.bankroll);
     });
+
+    socket.emit('get_ring_games', {}, (err, data) => {
+      setLoading(false);
+      if (!err && data) setTables(data.games || []);
+    });
+  }, []);
+
+  useEffect(() => {
+    const socket = connect();
+    if (!socket) return;
+
+    // Initial fetch
+    fetchBankrollAndTables();
+
+    // Poll every 5 seconds for new tables
+    pollRef.current = setInterval(fetchBankrollAndTables, 5000);
+
+    // Listen for bankroll updates
+    const onBankrollUpdate = (data) => {
+      if (data.bankroll !== undefined) setBankroll(data.bankroll);
+    };
+
+    socket.on('bankroll_updated', onBankrollUpdate);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      socket.off('bankroll_updated', onBankrollUpdate);
+    };
+  }, [fetchBankrollAndTables]);
+
+  const handleCreateTable = useCallback((data) => {
+    setShowCreate(false);
+    // Navigate to club room with ring game data
+    onEnterClub({
+      gameId: data.gameId,
+      tableName: data.tableName,
+      userId,
+      seatIndex: -1, // Host hasn't bought in yet
+      minBuyin: data.minBuyin,
+      maxBuyin: data.maxBuyin,
+    }, displayName);
+  }, [onEnterClub, userId, displayName]);
+
+  const handleJoinTable = useCallback((game) => {
+    setJoinTarget(game);
+  }, []);
+
+  const handleConfirmJoin = useCallback((data) => {
+    setJoinTarget(null);
+    onEnterClub({
+      gameId: data.gameId,
+      tableName: data.tableName,
+      userId: data.userId,
+      seatIndex: data.seatIndex,
+      buyinAmount: data.buyinAmount,
+    }, displayName);
+  }, [onEnterClub, displayName]);
+
+  const formatBankroll = (amount) => {
+    if (amount >= 1000000) return (amount / 1000000).toFixed(1) + 'M';
+    if (amount >= 1000) return (amount / 1000).toFixed(1) + 'K';
+    return amount.toLocaleString();
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 flex items-start justify-center p-4 pt-8">
+    <div className="min-h-screen bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 overflow-hidden">
       {/* Background decorative elements */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-80 h-80 bg-poker-gold/5 rounded-full blur-3xl" />
         <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-felt/10 rounded-full blur-3xl" />
       </div>
 
-      {/* Logout button */}
-      <button
-        onClick={onLogout}
-        className="absolute top-4 right-4 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded-lg transition-all active:scale-95"
-      >
-        Logout
-      </button>
-
-      <div className="relative w-full max-w-md">
-        {/* Logo / Header */}
-        <div className="text-center mb-6 animate-fade-in">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-felt to-felt-dark border-2 border-poker-gold/30 shadow-xl shadow-felt/20 mb-4">
-            <span className="text-4xl">🃏</span>
+      {/* ── Header Bar ── */}
+      <header className="relative bg-gray-900/80 backdrop-blur-sm border-b border-gray-800 px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-felt to-felt-dark border border-poker-gold/30 flex items-center justify-center">
+            <span className="text-lg">🃏</span>
           </div>
-          <h1 className="text-4xl font-bold font-display text-white mb-2">
-            Poker Club
-          </h1>
-          <p className="text-gray-400 text-sm">
-            Welcome back, <span className="text-poker-gold font-semibold">{displayName}</span>
-          </p>
+          <div>
+            <h1 className="text-sm font-bold text-white">Ring Games</h1>
+            <p className="text-[10px] text-gray-500">
+              Welcome, <span className="text-poker-gold">{displayName}</span>
+            </p>
+          </div>
         </div>
 
-        {/* Menu / Tab bar */}
-        {!mode && (
-          <div className="space-y-3 animate-slide-up">
-            <button
-              onClick={() => setMode('create')}
-              className="btn-primary w-full text-lg py-4 flex items-center justify-center gap-3"
-            >
-              <span>🎲</span>
-              Create New Club
-            </button>
-            <button
-              onClick={() => setMode('join')}
-              className="btn-secondary w-full text-lg py-4 flex items-center justify-center gap-3"
-            >
-              <span>🔑</span>
-              Join with Code
-            </button>
-            <button
-              onClick={() => { setMode('challenges'); setError(''); }}
-              className="w-full py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-semibold transition-all active:scale-95 flex items-center justify-center gap-2"
-            >
-              <span>⚔️</span>
-              Challenges
-            </button>
-          </div>
-        )}
-
-        {/* Create Club Mode */}
-        {mode === 'create' && (
-          <div className="animate-slide-up">
-            <button
-              onClick={handleCreateClub}
-              disabled={loading}
-              className="btn-primary w-full text-lg py-4 flex items-center justify-center gap-3"
-            >
-              {loading ? (
-                <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <><span>🃏</span> Deal Me In!</>
-              )}
-            </button>
-            <button
-              onClick={() => { setMode(null); setError(''); }}
-              className="w-full mt-3 text-gray-400 hover:text-white text-sm transition-colors py-2"
-            >
-              ← Back
-            </button>
-          </div>
-        )}
-
-        {/* Join Club Mode */}
-        {mode === 'join' && (
-          <div className="space-y-3 animate-slide-up">
-            <div className="bg-gray-900/70 backdrop-blur-sm rounded-2xl border border-gray-800 p-6">
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Enter Club Code
-              </label>
-              <input
-                type="text"
-                value={inviteCode}
-                onChange={(e) => {
-                  setInviteCode(e.target.value.toUpperCase().slice(0, 6));
-                  setError('');
-                }}
-                onKeyDown={(e) => e.key === 'Enter' && handleJoinClub()}
-                placeholder="e.g. ABC123"
-                maxLength={6}
-                className="input-field text-center text-2xl font-mono tracking-[0.3em]"
-                autoFocus
-              />
-              <p className="text-xs text-gray-500 mt-1 text-center">
-                6-character code
-              </p>
+        <div className="flex items-center gap-3">
+          {/* Bankroll */}
+          <div className="bg-gray-800/70 rounded-xl px-3 py-1.5 flex items-center gap-2">
+            <span className="text-yellow-400 text-xs">💰</span>
+            <div className="text-right">
+              <p className="text-xs font-bold text-poker-gold font-mono">{formatBankroll(bankroll)}</p>
+              <p className="text-[8px] text-gray-500 leading-none">chips</p>
             </div>
+          </div>
 
-            <button
-              onClick={handleJoinClub}
-              disabled={loading}
-              className="btn-primary w-full text-lg py-4 flex items-center justify-center gap-3"
-            >
-              {loading ? (
-                <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <><span>🚪</span> Enter Club</>
-              )}
-            </button>
+          <button onClick={onLogout}
+            className="text-gray-500 hover:text-gray-300 transition-colors p-1.5"
+            title="Logout">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+          </button>
+        </div>
+      </header>
 
-            <button
-              onClick={() => { setMode(null); setInviteCode(''); setError(''); }}
-              className="w-full mt-1 text-gray-400 hover:text-white text-sm transition-colors py-2"
-            >
-              ← Back
+      {/* ── Main Content ── */}
+      <div className="relative max-w-4xl mx-auto px-4 py-6">
+        {/* Action Bar */}
+        <div className="flex items-center justify-between mb-6 animate-fade-in">
+          <div>
+            <h2 className="text-xl font-bold text-white">Active Tables</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {tables.length} table{tables.length !== 1 ? 's' : ''} available
+              {loading && <span className="ml-2 text-gray-600 animate-pulse">Loading...</span>}
+            </p>
+          </div>
+          <button onClick={() => setShowCreate(true)}
+            className="px-4 py-2.5 bg-gradient-to-r from-poker-gold to-yellow-500 text-black rounded-xl text-sm font-bold
+                       hover:from-yellow-400 hover:to-yellow-300 transition-all active:scale-95 shadow-lg shadow-yellow-600/20
+                       flex items-center gap-2">
+            <span>+</span>
+            Create Table
+          </button>
+        </div>
+
+        {/* Table Grid */}
+        {!loading && tables.length === 0 ? (
+          <div className="text-center py-20 animate-fade-in">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-800/50 mb-4">
+              <span className="text-3xl opacity-50">🪑</span>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-400 mb-1">No Active Tables</h3>
+            <p className="text-sm text-gray-600 mb-6">Be the first to create one!</p>
+            <button onClick={() => setShowCreate(true)}
+              className="px-6 py-3 bg-gradient-to-r from-poker-gold to-yellow-500 text-black rounded-xl font-bold
+                         hover:from-yellow-400 hover:to-yellow-300 transition-all active:scale-95">
+              Create First Table
             </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 animate-fade-in">
+            {tables.map(game => (
+              <TableCard key={game.id} game={game} bankroll={bankroll} onJoin={handleJoinTable} />
+            ))}
           </div>
         )}
 
-        {/* Challenges Mode */}
-        {mode === 'challenges' && (
-          <div className="animate-slide-up">
-            <ChallengePanel onEnterChallengeClub={handleEnterChallengeClub} />
-            <button
-              onClick={() => { setMode(null); setError(''); }}
-              className="w-full mt-3 text-gray-400 hover:text-white text-sm transition-colors py-2"
-            >
-              ← Back
-            </button>
-          </div>
-        )}
-
-        {/* Error Display */}
+        {/* Error */}
         {error && (
           <div className="mt-4 bg-red-900/40 border border-red-800/50 rounded-xl p-4 text-red-300 text-sm animate-fade-in">
-            <div className="flex items-center gap-2">
-              <span>⚠️</span>
-              <span>{error}</span>
-            </div>
+            <span>⚠️ {error}</span>
           </div>
         )}
-
-        {/* Footer */}
-        <p className="text-center text-xs text-gray-600 mt-8">
-          Club Poker MVP
-        </p>
       </div>
+
+      {/* Modals */}
+      {showCreate && (
+        <CreateTableModal
+          onClose={() => setShowCreate(false)}
+          onCreate={handleCreateTable}
+        />
+      )}
+
+      {joinTarget && (
+        <JoinTableModal
+          game={joinTarget}
+          bankroll={bankroll}
+          onClose={() => setJoinTarget(null)}
+          onJoin={handleConfirmJoin}
+        />
+      )}
     </div>
   );
 }

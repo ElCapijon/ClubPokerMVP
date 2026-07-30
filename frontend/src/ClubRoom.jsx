@@ -122,12 +122,13 @@ function EmojiBubble({ emoji, userName }) {
 // MAIN COMPONENT
 // ====================================================================
 export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
-  const { clubId, inviteCode, userId, seatIndex: mySeatIndex } = clubData;
+  const { gameId = clubData.clubId, tableName = 'Poker Table', userId, seatIndex: mySeatIndex, buyinAmount } = clubData;
+  const clubId = gameId; // Internal alias for game loop
   const [players, setPlayers] = useState(Array(6).fill(null));
   const [gameState, setGameState] = useState('WAITING');
   const [isConnected, setIsConnected] = useState(true);
-  const [copiedInvite, setCopiedInvite] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
+  const [showCashOut, setShowCashOut] = useState(false);
+  const [cashingOut, setCashingOut] = useState(false);
   const [notifications, setNotifications] = useState([]);
 
   // Game state
@@ -179,7 +180,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
     const onConnect = () => {
       setIsConnected(true);
-      socket.emit('rejoin_club', { clubId }, (err) => {
+      socket.emit('rejoin_ring_game', { gameId: clubId }, (err) => {
         if (err) addNotification('Failed to reconnect', 'error');
       });
     };
@@ -318,6 +319,8 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
+    socket.on('table_state_update', onStateUpdate);
+    // Legacy support for old event name
     socket.on('club_state_update', onStateUpdate);
     socket.on('game_state_sync', onGameStateSync);
     socket.on('your_hole_cards', onYourHoleCards);
@@ -327,12 +330,18 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     socket.on('emoji_received', onEmojiReceived);
     socket.on('connect_error', onConnectError);
 
-    if (socket.connected) onConnect();
-    else socket.connect();
+    if (socket.connected) {
+      // Request full state update on reconnection to this room
+      setTimeout(() => socket.emit('rejoin_ring_game', { gameId: clubId }), 100);
+      onConnect();
+    } else {
+      socket.connect();
+    }
 
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
+      socket.off('table_state_update', onStateUpdate);
       socket.off('club_state_update', onStateUpdate);
       socket.off('game_state_sync', onGameStateSync);
       socket.off('your_hole_cards', onYourHoleCards);
@@ -351,64 +360,65 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 4000);
   }, []);
 
-  const handleCopyInvite = useCallback(() => {
-    navigator.clipboard.writeText(inviteCode).then(() => {
-      setCopiedInvite(true);
-      setTimeout(() => setCopiedInvite(false), 2000);
-    });
-  }, [inviteCode]);
-
-  const handleCopyShareLink = useCallback(() => {
-    const shareText = `♠️ Join my Poker Club! Code: ${inviteCode} — ${window.location.origin}`;
-    navigator.clipboard.writeText(shareText).then(() => {
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2000);
-    });
-  }, [inviteCode]);
-
   const handleReadyToggle = useCallback(() => {
-    getSocket().emit('player_ready', { clubId });
+    getSocket().emit('player_ready', { gameId: clubId });
   }, [clubId]);
 
   const handleStartGame = useCallback(() => {
-    getSocket().emit('start_game', { clubId }, (err) => {
+    getSocket().emit('start_game', { gameId: clubId }, (err) => {
       if (err) addNotification(err.error || 'Failed to start game', 'error');
     });
   }, [clubId, addNotification]);
 
   const handleAction = useCallback((action, amount) => {
-    getSocket().emit('player_action', { clubId, action, amount }, (err) => {
+    getSocket().emit('player_action', { gameId: clubId, action, amount }, (err) => {
       if (err) addNotification(err.error || 'Action failed', 'error');
     });
   }, [clubId, addNotification]);
 
   const handleSendEmoji = useCallback((emoji) => {
-    getSocket().emit('send_emoji', { clubId, emoji });
+    getSocket().emit('send_emoji', { gameId: clubId, emoji });
     setEmojiTrayOpen(false);
   }, [clubId]);
 
   const handleRebuy = useCallback(() => {
-    getSocket().emit('player_rebuy', { clubId }, (err) => {
+    const buyin = Math.max(50, clubData?.minBuyin || 50);
+    getSocket().emit('player_rebuy', { gameId: clubId, buyinAmount: buyin }, (err) => {
       if (err) addNotification(err.error || 'Rebuy failed', 'error');
-      else addNotification('Rebought! Back in the game.', 'success');
+      else addNotification(`Rebought ${buyin} chips!`, 'success');
     });
-  }, [clubId, addNotification]);
+  }, [clubId, clubData?.minBuyin, addNotification, myPlayerData?.stack]);
+
+  const handleCashOut = useCallback(() => {
+    setCashingOut(true);
+    getSocket().emit('leave_ring_game', { gameId: clubId }, (err, data) => {
+      setCashingOut(false);
+      setShowCashOut(false);
+      if (err) {
+        addNotification(err.error || 'Failed to cash out', 'error');
+        return;
+      }
+      addNotification(`💰 Cashed out ${data.cashOutAmount} chips!`, 'success');
+      // Navigate back to lobby
+      setTimeout(() => onLeave(), 1500);
+    });
+  }, [clubId, addNotification, onLeave]);
 
   const handleSitOutToggle = useCallback(() => {
-    getSocket().emit('player_sit_out', { clubId }, (err) => {
+    getSocket().emit('player_sit_out', { gameId: clubId }, (err) => {
       if (err) addNotification(err.error || 'Failed', 'error');
     });
   }, [clubId, addNotification]);
 
   const handleAddBots = useCallback(() => {
-    getSocket().emit('add_bots', { clubId }, (err, data) => {
+    getSocket().emit('add_bots', { gameId: clubId }, (err, data) => {
       if (err) addNotification(err.error || 'Failed to add bots', 'error');
       else addNotification(`🤖 Added ${data.botsAdded} bots to the table!`, 'success');
     });
   }, [clubId, addNotification]);
 
   const handleRemoveBots = useCallback(() => {
-    getSocket().emit('remove_bots', { clubId }, (err, data) => {
+    getSocket().emit('remove_bots', { gameId: clubId }, (err, data) => {
       if (err) addNotification(err.error || 'Failed to remove bots', 'error');
       else addNotification(`Removed ${data.botsRemoved} bots`, 'info');
     });
@@ -500,6 +510,39 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         </div>
       )}
 
+      {/* ── Cash Out Modal ── */}
+      {showCashOut && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 w-full max-w-xs animate-slide-up shadow-2xl">
+            <div className="text-center">
+              <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-emerald-500/20 mb-3">
+                <span className="text-2xl">💰</span>
+              </div>
+              <h3 className="text-lg font-bold text-white mb-1">Cash Out?</h3>
+              <p className="text-sm text-gray-400 mb-1">
+                Your stack: <span className="text-poker-gold font-bold font-mono">${myPlayerData?.stack?.toLocaleString() || 0}</span>
+              </p>
+              <p className="text-xs text-gray-500 mb-4">
+                This amount will be added to your bankroll.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowCashOut(false)} disabled={cashingOut}
+                className="flex-1 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-sm font-semibold hover:bg-gray-700 transition-all active:scale-95">
+                Stay
+              </button>
+              <button onClick={handleCashOut} disabled={cashingOut}
+                className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-xl text-sm font-bold
+                           hover:from-emerald-500 hover:to-emerald-400 transition-all active:scale-95 disabled:opacity-50">
+                {cashingOut ? (
+                  <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : 'Cash Out'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Hand Result Overlay ── */}
       {handResult && handResult.handResult && (
         <div className="fixed inset-0 z-40 pointer-events-none flex items-center justify-center"
@@ -534,13 +577,13 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button onClick={onLeave}
             className="text-gray-400 hover:text-white transition-colors p-1.5 -ml-1.5 shrink-0"
-            title="Leave Club">
+            title="Leave Table">
             <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
           </button>
           <div className="min-w-0">
-            <h2 className="text-xs sm:text-sm font-semibold text-white truncate">Poker Club</h2>
+            <h2 className="text-xs sm:text-sm font-semibold text-white truncate">{tableName}</h2>
             <p className="text-[10px] sm:text-xs text-gray-500 truncate">
               {connectedPlayers.length}/{MAX_SEATS} players
               {handCount > 0 && <span className="ml-1 sm:ml-2">· Hand #{handCount}</span>}
@@ -549,6 +592,14 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Cash Out button when game is not waiting */}
+          {gameState !== 'WAITING' && myPlayerData && myPlayerData.stack > 0 && (
+            <button onClick={() => setShowCashOut(true)}
+              className="px-2 sm:px-3 py-1 sm:py-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-lg text-[10px] sm:text-xs font-bold
+                         hover:from-emerald-500 hover:to-emerald-400 transition-all active:scale-95 shadow-lg shadow-emerald-600/20">
+              💰 Cash Out
+            </button>
+          )}
           <button onClick={onLogout}
             className="text-gray-500 hover:text-gray-300 transition-colors p-1.5 shrink-0"
             title="Logout">
@@ -556,23 +607,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
             </svg>
           </button>
-          <div className="bg-gray-800 rounded-lg px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5">
-            <span className="text-[10px] sm:text-xs text-gray-400 hidden sm:inline">Code:</span>
-            <span className="text-sm sm:text-lg font-mono font-bold text-poker-gold tracking-wider">{inviteCode}</span>
-            <button onClick={handleCopyInvite}
-              className={`p-1 rounded transition-colors ${copiedInvite ? 'text-green-400' : 'text-gray-500 hover:text-white'}`}
-              title="Copy code">
-              {copiedInvite ? (
-                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              ) : (
-                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              )}
-            </button>
-          </div>
         </div>
       </header>
 
@@ -812,7 +846,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                         className="px-4 py-2 bg-gradient-to-r from-poker-gold to-yellow-500 text-black font-bold rounded-xl
                                    hover:from-yellow-400 hover:to-yellow-300 transition-all duration-200 active:scale-95
                                    shadow-lg shadow-yellow-600/20 text-xs">
-                        💰 Rebuy (${clubData?.startingStack || 1500})
+                        💰 Rebuy (${clubData?.minBuyin || 50} chips)
                       </button>
                       <button onClick={handleSitOutToggle}
                         className={`px-4 py-2 rounded-xl font-semibold text-xs transition-all duration-200 active:scale-95 ${
@@ -965,11 +999,9 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     </div>
                   )}
                 </div>
-                <button onClick={handleCopyShareLink}
-                  className={`px-3 py-2 rounded-xl text-xs font-medium transition-all ${
-                    copiedCode ? 'bg-green-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                  }`}>
-                  {copiedCode ? 'Copied!' : 'Share'}
+                <button onClick={() => handleSendEmoji('🃏')}
+                  className="px-3 py-2 rounded-xl text-xs font-medium transition-all bg-gray-800 text-gray-300 hover:bg-gray-700">
+                  🀄
                 </button>
               </div>
             </div>
