@@ -94,14 +94,44 @@
            shadow-lg transition-all duration-300 relative;
   }
 
-  /* ---- The Felt Table ---- */
+  /* ---- The Felt Table (Professional Poker Table) ---- */
   .felt-table {
-    @apply rounded-[46%] border-[6px] sm:border-8 shadow-2xl shadow-black/50;
-    border-color: #5c3a1e;
-    background: radial-gradient(ellipse at 45% 45%, #1a7a3e 0%, #0f5a2a 40%, #0a3d1c 100%);
+    @apply rounded-[50%] shadow-2xl;
+    /* Thick wooden rail */
+    border: 12px solid;
+    border-color: #4a2c0a;
+    /* Outer shadow for depth */
     box-shadow:
-      0 0 60px rgba(0, 0, 0, 0.5),
-      inset 0 0 40px rgba(0, 0, 0, 0.2);
+      0 8px 32px rgba(0, 0, 0, 0.6),
+      0 0 0 2px rgba(0, 0, 0, 0.3),
+      inset 0 0 60px rgba(0, 0, 0, 0.25),
+      inset 0 0 15px rgba(0, 0, 0, 0.15);
+    /* Rich 3-layer felt gradient */
+    background: radial-gradient(ellipse at 48% 46%, #1e8a4a 0%, #15703a 35%, #0d5a2a 65%, #083d1c 100%);
+  }
+
+  /* Inner padded rail ring */
+  .felt-table::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.08);
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  /* Felt texture overlay */
+  .felt-table::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background-image:
+      radial-gradient(circle at 30% 40%, rgba(255,255,255,0.04) 0%, transparent 50%),
+      radial-gradient(circle at 70% 60%, rgba(255,255,255,0.02) 0%, transparent 40%);
+    pointer-events: none;
+    z-index: 1;
   }
 
   /* ---- Action Buttons ---- */

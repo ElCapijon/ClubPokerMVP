@@ -9,14 +9,15 @@ const PRESET_EMOJIS = ['😎', '🤡', '😱', '🔥', '💪', '🃏', '🍀', '
 // Seat positions for the oval table layout (clockwise from bottom-center)
 // Pushed up slightly to leave room for big hole cards + community cards below
 const SEAT_POSITIONS = [
-  // Professional 6-max coordinate layout (like PokerStars/GGPoker)
-  // Percentages relative to the table container
-  { top: 78, left: 50 },  // Seat 0: Hero at bottom center
-  { top: 66, left: 16 },  // Seat 1: Bottom-left
-  { top: 28, left: 8  },  // Seat 2: Top-left (pushed out for space)
-  { top: 7,  left: 50 },  // Seat 3: Top center
-  { top: 28, left: 92 },  // Seat 4: Top-right (pushed out for space)
-  { top: 66, left: 84 },  // Seat 5: Bottom-right
+  // Option 1: Ellipse formula + Manual Tweaks
+  // Center (50,45), radii rx=36, ry=32 on a 4:3 table
+  // Angles tuned for 6-max layout (hero at bottom)
+  { top: 84, left: 50 },  // Seat 0: Hero — bottom center
+  { top: 64, left: 20 },  // Seat 1: Bottom-left
+  { top: 36, left: 10 },  // Seat 2: Mid-left (pushed outward)
+  { top: 11, left: 50 },  // Seat 3: Top center
+  { top: 36, left: 90 },  // Seat 4: Mid-right (pushed outward)
+  { top: 64, left: 80 },  // Seat 5: Bottom-right
 ];
 
 // ─── Card Sizes ──────────────────────────────────────────────
@@ -567,7 +568,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
 
         {/* ── TOP ROW: Table + Players ── */}
         <div className="flex-1 flex items-center justify-center p-1 sm:p-2 min-h-0">
-          <div className="relative w-full max-h-full" style={{ maxWidth: '800px', aspectRatio: '6/5' }}>
+          <div className="relative w-full max-h-full" style={{ maxWidth: '800px', aspectRatio: '4/3' }}>
 
             {/* The Felt Table */}
             <div className="felt-table w-full h-full flex flex-col items-center justify-center relative overflow-hidden">
