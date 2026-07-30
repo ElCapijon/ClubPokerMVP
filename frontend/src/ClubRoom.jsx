@@ -193,9 +193,11 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
   // Bet slider
   const [betSliderValue, setBetSliderValue] = useState(0);
 
-  // Flying chips animation
+  // Flying chips animation + stacked pot chips
   const [flyingChips, setFlyingChips] = useState([]);
   const chipIdCounter = useRef(0);
+  const [potChips, setPotChips] = useState([]);
+  const potChipIdCounter = useRef(0);
 
   const emojiTrayRef = useRef(null);
   const emojiIdCounter = useRef(0);
@@ -249,6 +251,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
         // Clear hand result when a new hand starts
         if (data.gameStatus === 'PREFLOP') {
           setHandResult(null);
+          setPotChips([]); // Clear accumulated chips for new hand
         }
         setGameState(data.gameStatus);
       }
@@ -294,7 +297,12 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
       setDealerSeatIndex(data.dealerSeatIndex ?? -1);
       setHandCount(data.handCount || 0);
       setHoleCards(data.holeCards || []);
-      if (data.gameStatus) setGameState(data.gameStatus);
+      if (data.gameStatus) {
+        setGameState(data.gameStatus);
+        if (data.gameStatus === 'PREFLOP') {
+          setPotChips([]);
+        }
+      }
 
       if (data.players) {
         setPlayers(prev => {
@@ -354,6 +362,9 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
         }
       }
     };
+
+    // Wire up pot chips to clear when the next hand starts
+    // (done inside onGameStateSync below)
 
     const onEmojiReceived = (data) => {
       const id = ++emojiIdCounter.current;
@@ -461,10 +472,19 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
     });
   }, [clubId, addNotification]);
 
-  // Remove a flying chip after its animation completes
-  const removeFlyingChip = useCallback((id) => {
+  // When a flying chip lands, move it to the pot stack (instead of removing)
+  const onFlyingChipLanded = useCallback((id, amount) => {
     setFlyingChips(prev => prev.filter(c => c.id !== id));
-  }, []);
+    // Don't stack into pot if a new hand has already started
+    if (gameState === 'PREFLOP' || gameState === 'WAITING') return;
+    // Stack in the pot with small random offset for visual pile effect
+    const stackId = ++potChipIdCounter.current;
+    const settleDelay = potChipIdCounter.current * 25;
+    const offsetX = (Math.random() - 0.5) * 24;
+    const offsetY = (Math.random() - 0.5) * 16;
+    const rotation = (Math.random() - 0.5) * 20;
+    setPotChips(prev => [...prev, { id: stackId, amount, offsetX, offsetY, rotation, settleDelay }]);
+  }, [gameState]);
 
   // ─── Derived state ────────────────────────────────────────
   const isMyTurn = currentPlayerSeatIndex === mySeatIndex
@@ -649,13 +669,42 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                 ))}
               </div>
 
-              {/* ── Pot ── */}
+              {/* ── Pot with accumulated chip stack ── */}
               {pot > 0 && (
-                <div className="bg-black/50 rounded-full px-4 sm:px-6 py-1.5 sm:py-2 backdrop-blur-sm z-10 animate-chip-stack">
-                  <span className="text-sm sm:text-base font-bold text-poker-gold flex items-center gap-2">
-                    <span className="text-yellow-400/60 text-xs">💰</span>
-                    Pot: ${pot.toLocaleString()}
-                  </span>
+                <div className="relative flex flex-col items-center z-10 animate-chip-stack">
+                  {/* Visual chip pile */}
+                  {potChips.length > 0 && (
+                    <div className="relative w-14 h-10 mb-1">
+                      {potChips.map((chip, i) => (
+                        <div
+                          key={chip.id}
+                          className="absolute chip-stack-piece"
+                          style={{
+                            left: `calc(50% + ${chip.offsetX}px)`,
+                            top: `calc(50% + ${chip.offsetY}px)`,
+                            transform: `translate(-50%, -50%) rotate(${chip.rotation}deg)`,            zIndex: i,
+              animationDelay: `${chip.settleDelay}ms`,
+                          }}
+                        >
+                          <div
+                            className="w-[18px] h-[18px] rounded-full flex items-center justify-center
+                                       text-[6px] font-bold text-white shadow-lg border border-yellow-300/30"
+                            style={{
+                              background: 'radial-gradient(circle at 35% 35%, #f5d742, #d4a017, #b8860b)',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.2)',
+                            }}
+                          ></div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Pot label */}
+                  <div className="bg-black/50 rounded-full px-4 sm:px-6 py-1.5 sm:py-2 backdrop-blur-sm">
+                    <span className="text-sm sm:text-base font-bold text-poker-gold flex items-center gap-2">
+                      <span className="text-yellow-400/60 text-xs">💰</span>
+                      Pot: ${pot.toLocaleString()}
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -680,7 +729,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                 key={chip.id}
                 seatIndex={chip.seatIndex}
                 amount={chip.amount}
-                onComplete={() => removeFlyingChip(chip.id)}
+                onComplete={() => onFlyingChipLanded(chip.id, chip.amount)}
               />
             ))}
 

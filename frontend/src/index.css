@@ -299,6 +299,26 @@
   animation: chipStack 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* Chip stack piece — settle into the pot pile */
+@keyframes chipStackSettle {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2) rotate(90deg);
+  }
+  60% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.8) rotate(-10deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+  }
+}
+
+.chip-stack-piece {
+  animation: chipStackSettle 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
 /* Flying chip toss — arc + spin toward center */
 @keyframes chipToss {
   0% {
