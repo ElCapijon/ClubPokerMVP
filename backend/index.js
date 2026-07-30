@@ -217,6 +217,9 @@ const clubs = new Map();
 // Map<socketId, { clubId, userId }> for quick lookups
 const socketToPlayer = new Map();
 
+// Map<userId, socketId> for finding connected users (for challenges)
+const userIdToSocket = new Map();
+
 // Hand counters for dealer rotation across hands
 const handCounters = new Map(); // Map<clubId, number>
 
@@ -578,8 +581,10 @@ function recordAction(clubId, seatIndex, action, amount) {
 // ============================================================
 // Socket.io Event Handlers
 // ============================================================
-io.on('connection', (socket) => {
-  console.log(`[Connect] ${socket.id}`);
+io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user: ${socket.displayName})`);
+
+  // Track this user's socket for challenge notifications
+  userIdToSocket.set(socket.userId, socket.id);
 
   // ---------- CREATE CLUB ----------
   socket.on('create_club', async (data, callback) => {
@@ -1134,8 +1139,344 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ============================================================
+  // CHALLENGE SYSTEM
+  // ============================================================
+
+  // ---------- FIND USERS ----------
+  socket.on('find_users', async ({ query }, callback) => {
+    try {
+      if (!query || query.trim().length < 2) {
+        return callback({ error: 'Search query must be at least 2 characters' });
+      }
+
+      const search = `%${query.trim()}%`;
+      const result = await pool.query(
+        `SELECT id, display_name, avatar_color, total_wins, hands_played
+         FROM users
+         WHERE (email ILIKE $1 OR display_name ILIKE $1)
+          AND id != $2
+         LIMIT 10`,
+        [search, socket.userId]
+      );
+
+      const users = result.rows.map(u => ({
+        id: u.id,
+        displayName: u.display_name,
+        avatarColor: u.avatar_color,
+        totalWins: u.total_wins,
+        handsPlayed: u.hands_played,
+      }));
+
+      callback(null, { users });
+    } catch (err) {
+      console.error('[Find Users Error]', err);
+      callback({ error: 'Failed to search users' });
+    }
+  });
+
+  // ---------- GET MY CHALLENGES ----------
+  socket.on('get_my_challenges', async (data, callback) => {
+    try {
+      const myId = socket.userId;
+
+      const result = await pool.query(
+        `SELECT c.id, c.status, c.buy_in, c.blind_level, c.max_hands, c.created_at,
+                chal.id AS challenger_id, chal.display_name AS challenger_name, chal.avatar_color AS challenger_color,
+                chale.id AS challengee_id, chale.display_name AS challengee_name, chale.avatar_color AS challengee_color
+         FROM challenges c
+         JOIN users chal ON c.challenger_id = chal.id
+         JOIN users chale ON c.challengee_id = chale.id
+         WHERE (c.challenger_id = $1 OR c.challengee_id = $1)
+          AND c.status = 'pending'
+         ORDER BY c.created_at DESC
+         LIMIT 20`,
+        [myId]
+      );
+
+      const challenges = result.rows.map(row => ({
+        id: row.id,
+        status: row.status,
+        buyIn: row.buy_in,
+        blindLevel: row.blind_level,
+        maxHands: row.max_hands,
+        createdAt: row.created_at,
+        isIncoming: row.challengee_id === myId,
+        opponent: {
+          id: row.challenger_id === myId ? row.challengee_id : row.challenger_id,
+          displayName: row.challenger_id === myId ? row.challengee_name : row.challenger_name,
+          avatarColor: row.challenger_id === myId ? row.challengee_color : row.challenger_color,
+        },
+      }));
+
+      callback(null, { challenges });
+    } catch (err) {
+      console.error('[Get Challenges Error]', err);
+      callback({ error: 'Failed to get challenges' });
+    }
+  });
+
+  // ---------- SEND CHALLENGE ----------
+  socket.on('send_challenge', async ({ opponentId, buyIn, blindLevel, maxHands }, callback) => {
+    try {
+      if (!opponentId) {
+        return callback({ error: 'Opponent is required' });
+      }
+
+      // Check for existing pending challenge between these two
+      const existing = await pool.query(
+        `SELECT id FROM challenges
+         WHERE ((challenger_id = $1 AND challengee_id = $2) OR (challenger_id = $2 AND challengee_id = $1))
+          AND status = 'pending'`,
+        [socket.userId, opponentId]
+      );
+
+      if (existing.rows.length > 0) {
+        return callback({ error: 'You already have a pending challenge with this player' });
+      }
+
+      const result = await pool.query(
+        `INSERT INTO challenges (challenger_id, challengee_id, buy_in, blind_level, max_hands)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, status, buy_in, blind_level, max_hands, created_at`,
+        [socket.userId, opponentId, buyIn || 0, blindLevel || 20, maxHands || 0]
+      );
+
+      const challenge = result.rows[0];
+
+      // Get challenger info
+      const challengerResult = await pool.query(
+        'SELECT id, display_name, avatar_color FROM users WHERE id = $1',
+        [socket.userId]
+      );
+      const challenger = challengerResult.rows[0];
+
+      // Notify the opponent in real-time if connected
+      const opponentSocketId = userIdToSocket.get(opponentId);
+      if (opponentSocketId) {
+        io.to(opponentSocketId).emit('new_challenge', {
+          id: challenge.id,
+          status: challenge.status,
+          buyIn: challenge.buy_in,
+          blindLevel: challenge.blind_level,
+          maxHands: challenge.max_hands,
+          createdAt: challenge.created_at,
+          isIncoming: true,
+          opponent: {
+            id: challenger.id,
+            displayName: challenger.display_name,
+            avatarColor: challenger.avatar_color,
+          },
+        });
+      }
+
+      callback(null, {
+        id: challenge.id,
+        status: challenge.status,
+        buyIn: challenge.buy_in,
+        blindLevel: challenge.blind_level,
+        maxHands: challenge.max_hands,
+        createdAt: challenge.created_at,
+      });
+    } catch (err) {
+      console.error('[Send Challenge Error]', err);
+      callback({ error: 'Failed to send challenge' });
+    }
+  });
+
+  // ---------- ACCEPT CHALLENGE ----------
+  socket.on('accept_challenge', async ({ challengeId }, callback) => {
+    try {
+      if (!challengeId) {
+        return callback({ error: 'Challenge ID is required' });
+      }
+
+      const result = await pool.query(
+        `SELECT c.*, u.display_name AS challenger_name
+         FROM challenges c
+         JOIN users u ON c.challenger_id = u.id
+         WHERE c.id = $1 AND c.status = 'pending'`,
+        [challengeId]
+      );
+
+      if (result.rows.length === 0) {
+        return callback({ error: 'Challenge not found or already resolved' });
+      }
+
+      const challenge = result.rows[0];
+
+      // Only the challengee can accept
+      if (challenge.challengee_id !== socket.userId) {
+        return callback({ error: 'Only the challenged player can accept' });
+      }
+
+      // Update challenge status
+      await pool.query(
+        'UPDATE challenges SET status = $1 WHERE id = $2',
+        ['accepted', challengeId]
+      );
+
+      // Create a club room for the two players
+      const inviteCode = generateInviteCode();
+      const clubId = uuidv4();
+
+      // Create club seats: challenger at seat 0, challengee at seat 1
+      const clubState = createClubState(challenge.challenger_id, challenge.challenger_name, inviteCode);
+      clubState.id = clubId;
+
+      // Add the challengee to seat 1
+      const challengeeResult = await pool.query(
+        'SELECT display_name FROM users WHERE id = $1',
+        [challenge.challengee_id]
+      );
+      const challengeeName = challengeeResult.rows[0]?.display_name || 'Player';
+
+      clubState.seats[1] = {
+        userId: challenge.challengee_id,
+        userName: challengeeName,
+        stack: clubState.tableSettings.startingStack,
+        isReady: true,
+        isConnected: true,
+        isSittingOut: false,
+      };
+
+      clubs.set(clubId, clubState);
+
+      // Persist club to DB
+      try {
+        await pool.query(
+          `INSERT INTO clubs (id, invite_code, host_user_id, small_blind, big_blind, starting_stack, action_timer_seconds, allow_rebuys)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [clubId, inviteCode, challenge.challenger_id,
+           clubState.tableSettings.sb, clubState.tableSettings.bb,
+           clubState.tableSettings.startingStack, clubState.tableSettings.timer, clubState.tableSettings.allowRebuys]
+        );
+      } catch (dbErr) {
+        console.error('[DB] Error persisting challenge club:', dbErr.message);
+      }
+
+      // Link challenge to club
+      await pool.query(
+        'UPDATE challenges SET club_id = $1 WHERE id = $2',
+        [clubId, challengeId]
+      );
+
+      // Join the challenger's socket to the room
+      const challengerSocketId = userIdToSocket.get(challenge.challenger_id);
+      if (challengerSocketId) {
+        const challengerSocket = io.sockets.sockets.get(challengerSocketId);
+        if (challengerSocket) {
+          challengerSocket.join(clubRoom(clubId));
+          socketToPlayer.set(challengerSocketId, { clubId, userId: challenge.challenger_id, seatIndex: 0 });
+          // Notify challenger
+          io.to(challengerSocketId).emit('challenge_accepted', {
+            clubId,
+            inviteCode,
+            userId: challenge.challenger_id,
+            seatIndex: 0,
+          });
+        }
+      }
+
+      // Join the challengee's socket to the room
+      socket.join(clubRoom(clubId));
+      socketToPlayer.set(socket.id, { clubId, userId: challenge.challengee_id, seatIndex: 1 });
+
+      // Start the game immediately (both are ready)
+      let handCount = handCounters.get(clubId) || 0;
+      const hand = createHand(clubState, handCount);
+      if (hand) {
+        startHand(hand);
+        clubState.currentHand = hand;
+        clubState.gameState = hand.gameStatus;
+        handCounters.set(clubId, handCount + 1);
+        broadcastGameState(clubId);
+        setActionTimer(clubId);
+      }
+
+      // Return club data to the challengee
+      callback(null, {
+        clubId,
+        inviteCode,
+        userId: challenge.challengee_id,
+        seatIndex: 1,
+        autoStarted: true,
+      });
+
+      console.log(`[Challenge] Accepted! Club ${clubId} created for ${challenge.challenger_name} vs ${challengeeName}`);
+    } catch (err) {
+      console.error('[Accept Challenge Error]', err);
+      callback({ error: 'Failed to accept challenge' });
+    }
+  });
+
+  // ---------- REJECT CHALLENGE ----------
+  socket.on('reject_challenge', async ({ challengeId }, callback) => {
+    try {
+      if (!challengeId) {
+        return callback({ error: 'Challenge ID is required' });
+      }
+
+      const result = await pool.query(
+        `SELECT c.* FROM challenges c WHERE c.id = $1 AND c.status = 'pending' AND c.challengee_id = $2`,
+        [challengeId, socket.userId]
+      );
+
+      if (result.rows.length === 0) {
+        return callback({ error: 'Challenge not found or already resolved' });
+      }
+
+      await pool.query(
+        'UPDATE challenges SET status = $1 WHERE id = $2',
+        ['rejected', challengeId]
+      );
+
+      // Notify the challenger
+      const challengerSocketId = userIdToSocket.get(result.rows[0].challenger_id);
+      if (challengerSocketId) {
+        io.to(challengerSocketId).emit('challenge_rejected', { challengeId });
+      }
+
+      callback(null, { success: true });
+    } catch (err) {
+      console.error('[Reject Challenge Error]', err);
+      callback({ error: 'Failed to reject challenge' });
+    }
+  });
+
+  // ---------- CANCEL CHALLENGE ----------
+  socket.on('cancel_challenge', async ({ challengeId }, callback) => {
+    try {
+      if (!challengeId) {
+        return callback({ error: 'Challenge ID is required' });
+      }
+
+      const result = await pool.query(
+        `SELECT c.* FROM challenges c WHERE c.id = $1 AND c.status = 'pending' AND c.challenger_id = $2`,
+        [challengeId, socket.userId]
+      );
+
+      if (result.rows.length === 0) {
+        return callback({ error: 'Challenge not found or already resolved' });
+      }
+
+      await pool.query(
+        'UPDATE challenges SET status = $1 WHERE id = $2',
+        ['cancelled', challengeId]
+      );
+
+      callback(null, { success: true });
+    } catch (err) {
+      console.error('[Cancel Challenge Error]', err);
+      callback({ error: 'Failed to cancel challenge' });
+    }
+  });
+
   // ---------- DISCONNECT ----------
   socket.on('disconnect', () => {
+    // Clean up user tracking
+    userIdToSocket.delete(socket.userId);
+
     const playerInfo = socketToPlayer.get(socket.id);
     if (playerInfo) {
       const { clubId, userId, seatIndex } = playerInfo;
@@ -1161,21 +1502,17 @@ io.on('connection', (socket) => {
               if (hand && hand.gameStatus !== 'WAITING' && hand.gameStatus !== GAME_STATES.SHOWDOWN && hand.gameStatus !== GAME_STATES.HAND_COMPLETE) {
                 const playerInHand = hand.players.find(p => p.seatIndex === seatIndex);
                 if (playerInHand && !playerInHand.isFolded && !playerInHand.isAllIn) {
-                  // Use handleAction to properly process the fold and advance the game
                   clearActionTimer(clubId);
                   const result = handleAction(hand, seatIndex, 'fold');
                   if (!result.error) {
                     console.log(`[Auto-Fold] ${seat.userName} folded due to disconnect timeout`);
-                    // Mark as sitting out after disconnect timeout
                     if (seat) seat.isSittingOut = true;
-                    // Update club game state and stacks
                     club.gameState = hand.gameStatus;
                     for (const hp of hand.players) {
                       const s = club.seats[hp.seatIndex];
                       if (s) s.stack = hp.stack;
                     }
                     broadcastGameState(clubId);
-                    // If hand isn't complete, set timer for next player
                     if (!isHandComplete(hand)) {
                       setActionTimer(clubId);
                     }

@@ -238,6 +238,7 @@ export default function App() {
       <Lobby
         onEnterClub={handleEnterClub}
         displayName={displayName}
+        userId={getUser()?.id}
         onLogout={handleLogout}
       />
     );
