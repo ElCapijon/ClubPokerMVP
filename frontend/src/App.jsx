@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import Lobby from './Lobby';
 import ClubRoom from './ClubRoom';
+import QuestPanel from './QuestPanel';
 import { connect, disconnect, getSocket } from './socket';
 import { saveAuth, loadAuth, clearAuth, getToken, getUser } from './auth';
 
@@ -223,24 +224,30 @@ export default function App() {
   // Club view
   if (view === 'club' && clubData) {
     return (
-      <ClubRoom
-        clubData={clubData}
-        displayName={displayName}
-        onLeave={handleLeaveClub}
-        onLogout={handleLogout}
-      />
+      <>
+        <ClubRoom
+          clubData={clubData}
+          displayName={displayName}
+          onLeave={handleLeaveClub}
+          onLogout={handleLogout}
+        />
+        <QuestPanel />
+      </>
     );
   }
 
   // Lobby view (requires auth)
   if (view === 'lobby') {
     return (
-      <Lobby
-        onEnterClub={handleEnterClub}
-        displayName={displayName}
-        userId={getUser()?.id}
-        onLogout={handleLogout}
-      />
+      <>
+        <Lobby
+          onEnterClub={handleEnterClub}
+          displayName={displayName}
+          userId={getUser()?.id}
+          onLogout={handleLogout}
+        />
+        <QuestPanel />
+      </>
     );
   }
 

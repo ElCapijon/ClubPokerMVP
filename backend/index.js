@@ -9,6 +9,7 @@ const jwt = require('jsonwebtoken');
 const { generateInviteCode } = require('./InviteCode');
 const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction } = require('./GameHand');
 const { getNextBotName, resetBotNames, decideAction } = require('./botPlayer');
+const ChallengeTracker = require('./ChallengeTracker');
 const pool = require('./db');
 
 // ============================================================
@@ -64,6 +65,37 @@ app.get('/api/migrate', async (req, res) => {
   } catch (err) {
     console.error('[Migrate] Failed:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================
+// JWT Auth Middleware for REST endpoints
+// ============================================================
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Authentication required' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(403).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// ============================================================
+// Challenge Progress API
+// ============================================================
+
+// GET /api/challenges — get challenge definitions + user's progress
+app.get('/api/challenges', authenticateToken, async (req, res) => {
+  try {
+    const progress = await ChallengeTracker.getUserProgress(req.user.userId);
+    res.json({ challenges: progress });
+  } catch (err) {
+    console.error('[Challenges API] Error:', err.message);
+    res.status(500).json({ error: 'Failed to get challenges' });
   }
 });
 
@@ -392,6 +424,15 @@ function processBotAction(clubId) {
 
   // If hand is complete, schedule next hand
   if (isHandComplete(hand)) {
+    // Challenge tracking (non-blocking, fire-and-forget)
+    if (hand.winningUserId && !hand.winningUserId.startsWith('bot_')) {
+      ChallengeTracker.trackHandRank(hand.winningUserId, hand.winningRank);
+    }
+    hand.players.forEach(p => {
+      if (p.userId && !p.userId.startsWith('bot_')) {
+        ChallengeTracker.trackVolume(p.userId);
+      }
+    });
     lastActions.delete(clubId);
     io.to(clubRoom(clubId)).emit('hand_complete', {
       handResult: hand.handResult,
@@ -487,6 +528,15 @@ function setActionTimer(clubId) {
 
     // If hand is complete, broadcast results and schedule next hand
     if (isHandComplete(handNow)) {
+      // Challenge tracking (non-blocking, fire-and-forget)
+      if (handNow.winningUserId && !handNow.winningUserId.startsWith('bot_')) {
+        ChallengeTracker.trackHandRank(handNow.winningUserId, handNow.winningRank);
+      }
+      handNow.players.forEach(p => {
+        if (p.userId && !p.userId.startsWith('bot_')) {
+          ChallengeTracker.trackVolume(p.userId);
+        }
+      });
       io.to(clubRoom(clubId)).emit('hand_complete', {
         handResult: handNow.handResult,
         communityCards: handNow.communityCards,
@@ -828,6 +878,28 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
       // If hand is complete, broadcast results and schedule next hand
       if (isHandComplete(club.currentHand)) {
         const hand = club.currentHand;
+
+        // Challenge tracking (non-blocking, fire-and-forget)
+        if (hand.winningUserId && !hand.winningUserId.startsWith('bot_')) {
+          ChallengeTracker.trackHandRank(hand.winningUserId, hand.winningRank);
+        }
+        hand.players.forEach(p => {
+          if (p.userId && !p.userId.startsWith('bot_')) {
+            ChallengeTracker.trackVolume(p.userId);
+          }
+        });
+
+        // Blind Stealer: pre-flop raise that makes everyone fold
+        if (hand.gameStatus === 'PREFLOP' && hand.winningRank === 0 && hand.winningUserId) {
+          // The last raiser is the one who stole the blinds
+          const raiserSeatIndex = hand.lastRaiserIndex >= 0 ? hand.players[hand.lastRaiserIndex]?.seatIndex : -1;
+          if (raiserSeatIndex >= 0) {
+            const raiser = hand.players.find(p => p.seatIndex === raiserSeatIndex);
+            if (raiser && raiser.userId && !raiser.userId.startsWith('bot_')) {
+              ChallengeTracker.trackWagering(raiser.userId);
+            }
+          }
+        }
 
         lastActions.delete(clubId);
 
@@ -1533,6 +1605,25 @@ io.on('connection', (socket) => {      console.log(`[Connect] ${socket.id} (user
     }
     console.log(`[Disconnect] ${socket.id}`);
   });
+});
+
+// ============================================================
+// Initialize Challenge Tracker
+// ============================================================
+ChallengeTracker.init(io, userIdToSocket).catch(err => {
+  console.error('[Challenges] Failed to initialize tracker:', err.message);
+});
+
+// Graceful shutdown: flush pending progress
+process.on('SIGTERM', () => {
+  console.log('[Server] Shutting down...');
+  ChallengeTracker.shutdown();
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  console.log('[Server] Shutting down...');
+  ChallengeTracker.shutdown();
+  process.exit(0);
 });
 
 // ============================================================

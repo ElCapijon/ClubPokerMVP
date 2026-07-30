@@ -68,10 +68,53 @@ async function migrate() {
       );
     `);
 
+    // Challenge Definitions (static quest catalog)
+    await client.query(`
+      CREATE TABLE challenge_definitions (
+        id SERIAL PRIMARY KEY,
+        category VARCHAR(20) NOT NULL,
+        name VARCHAR(50) NOT NULL,
+        description VARCHAR(100) NOT NULL,
+        target_value INTEGER NOT NULL,
+        target_rank INTEGER,
+        reward_badge VARCHAR(30),
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // User Challenge Progress
+    await client.query(`
+      CREATE TABLE user_challenge_progress (
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        challenge_id INTEGER REFERENCES challenge_definitions(id) ON DELETE CASCADE,
+        progress INTEGER DEFAULT 0,
+        is_completed BOOLEAN DEFAULT FALSE,
+        completed_at TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (user_id, challenge_id)
+      );
+    `);
+
+    // Seed challenge definitions
+    await client.query(`
+      INSERT INTO challenge_definitions (category, name, description, target_value, target_rank, reward_badge) VALUES
+        ('hand_rank', 'Three of a Kind', 'Make a Three of a Kind at showdown', 1, 4, '🎲'),
+        ('hand_rank', 'Flush Master', 'Win a hand with a Flush or better', 3, 6, '🌊'),
+        ('hand_rank', 'Full House', 'Make a Full House at showdown', 1, 7, '🏠'),
+        ('hand_rank', 'Four of a Kind', 'Hit Four of a Kind at showdown', 1, 8, '💎'),
+        ('hand_rank', 'Straight Flush', 'Hit a Straight Flush', 1, 9, '🔥'),
+        ('hand_rank', 'Royal Dream', 'Hit a Royal Flush', 1, 9, '👑'),
+        ('wagering', 'Blind Stealer', 'Successfully steal the blinds pre-flop', 10, NULL, '🦊'),
+        ('volume', 'Grinder', 'Play 50 hands', 50, NULL, '⛏️'),
+        ('volume', 'High Roller', 'Play 200 hands', 200, NULL, '💰'),
+        ('volume', 'First Win', 'Win your first hand', 1, NULL, '🏆');
+    `);
+
     await client.query('COMMIT');
     console.log('Migration completed successfully!');
-    console.log('Tables created: users, clubs, hand_histories, challenges');
-    return { tables: ['users', 'clubs', 'hand_histories', 'challenges'] };
+    console.log('Tables created: users, clubs, hand_histories, challenges, challenge_definitions, user_challenge_progress');
+    console.log('Seed data: 10 challenge definitions inserted');
+    return { tables: ['users', 'clubs', 'hand_histories', 'challenges', 'challenge_definitions', 'user_challenge_progress'] };
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);

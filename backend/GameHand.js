@@ -259,6 +259,7 @@ function advanceStreet(hand) {
 /**
  * Evaluate hands and determine winners at showdown.
  * Returns the hand with result data attached.
+ * Attaches winningRank and winningUserId for challenge tracking.
  */
 function goToShowdown(hand) {
   hand.gameStatus = GAME_STATES.SHOWDOWN;
@@ -284,6 +285,8 @@ function goToShowdown(hand) {
       }],
     }];
     hand.handResult = results;
+    hand.winningUserId = winner.userId;
+    hand.winningRank = 0;
     hand.gameStatus = GAME_STATES.HAND_COMPLETE;
     return hand;
   }
@@ -315,16 +318,26 @@ function goToShowdown(hand) {
   }));
 
   // Award winnings to each player's stack
+  let highestRank = -1;
+  let firstWinnerId = null;
   for (const pot of mappedResults) {
     for (const winner of pot.winners) {
       const hp = hand.players.find(p => p.seatIndex === winner.seatIndex);
       if (hp) {
         hp.stack += winner.amountWon;
       }
+      // Track the highest ranked hand's owner for challenge tracking
+      if (winner.handResult && winner.handResult.rank > highestRank) {
+        highestRank = winner.handResult.rank;
+        const hp = hand.players.find(p => p.seatIndex === winner.seatIndex);
+        if (hp) firstWinnerId = hp.userId;
+      }
     }
   }
 
   hand.handResult = mappedResults;
+  hand.winningUserId = firstWinnerId;
+  hand.winningRank = highestRank > 0 ? highestRank : 0;
   hand.gameStatus = GAME_STATES.HAND_COMPLETE;
   return hand;
 }
