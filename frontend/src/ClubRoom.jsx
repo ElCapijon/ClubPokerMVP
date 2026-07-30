@@ -74,25 +74,25 @@ function Card({ card, faceDown, size, dealDelay }) {
   const color = isRed ? 'text-red-600' : 'text-gray-900';
   const rankDisplay = card.rankName === '10' ? '10' : card.rankName;
 
-  return (
-    <div
-      className={`card-front rounded-lg shadow-lg border border-gray-200/80 select-none ${visible}`}
+  return (              <div className={`card-front rounded-lg shadow-lg border border-gray-200/80 select-none ${visible}`}
       style={{
         width: dim.w, height: dim.h,
         transition: `all 0.35s cubic-bezier(0.34,1.56,0.64,1) ${(dealDelay||0)*120}ms`,
       }}
     >
+      {/* Center suit - absolutely centered via flexbox on parent */}
+      <span className={`${dim.suit} ${color} absolute inset-0 flex items-center justify-center pointer-events-none`}>
+        {suitSymbol}
+      </span>
+
       {/* Top-left corner */}
-      <div className="absolute top-0.5 left-1 flex flex-col items-center leading-none">
+      <div className="absolute top-0.5 left-1 flex flex-col items-center leading-none pointer-events-none">
         <span className={`${dim.corner} font-bold ${color}`}>{rankDisplay}</span>
         <span className={`${dim.corner} ${color}`}>{suitSymbol}</span>
       </div>
 
-      {/* Center suit */}
-      <span className={`${dim.suit} ${color}`}>{suitSymbol}</span>
-
       {/* Bottom-right corner (flipped) */}
-      <div className="absolute bottom-0.5 right-1 flex flex-col items-center leading-none rotate-180">
+      <div className="absolute bottom-0.5 right-1 flex flex-col items-center leading-none rotate-180 pointer-events-none">
         <span className={`${dim.corner} font-bold ${color}`}>{rankDisplay}</span>
         <span className={`${dim.corner} ${color}`}>{suitSymbol}</span>
       </div>
@@ -208,6 +208,8 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
               ...existing,
               ...p,
               isPlaying: true,
+              // Game state sync is public — never includes hole cards
+              showHoleCards: false,
               holeCards: existing?.holeCards || undefined,
             };
           }
@@ -249,6 +251,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
               ...existing,
               ...p,
               isPlaying: true,
+              showHoleCards: false,
               holeCards: existing?.holeCards || data.holeCards || undefined,
             };
           }
@@ -610,16 +613,16 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
               if (!pos) return null;
               const isMe = index === mySeatIndex;
 
-              // Empty seat
+              // Empty seat — show card back as placeholder
               if (!player) {
                 return (
                   <div key={index}
-                    className="absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-500 pointer-events-none"
+                    className="absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-300 pointer-events-none"
                     style={{ top: `${pos.top}%`, left: `${pos.left}%` }}
                   >
-                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-dashed border-gray-600/40 bg-gray-800/20
-                                    flex items-center justify-center text-[10px] text-gray-500/50">
-                      {index + 1}
+                    <div className="flex flex-col items-center gap-1 opacity-30">
+                      <Card card={null} faceDown={true} size="sm" dealDelay={0} />
+                      <span className="text-[8px] text-gray-500/40">Seat {index + 1}</span>
                     </div>
                   </div>
                 );
@@ -698,7 +701,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                     </p>
 
                     {/* Other players' hole cards (only at showdown) */}
-                    {!isMe && player.showHoleCards && player.holeCards && player.holeCards.length > 0 && (
+                    {!isMe && (gameState === 'SHOWDOWN' || gameState === 'HAND_COMPLETE') && player.showHoleCards && player.holeCards && player.holeCards.length > 0 && (
                       <div className="flex justify-center gap-0.5 mt-0.5">
                         {player.holeCards.map((card, i) => (
                           <Card key={i} card={card} faceDown={false} size="sm" dealDelay={i} />
