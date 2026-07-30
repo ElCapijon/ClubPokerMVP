@@ -213,14 +213,13 @@ async function migrate() {
       ('fourOfAKindMade', 'Quads III', 'Make four of a kind 10 times', 10, '💎'),
       ('straightFlushMade', 'Straight Flush I', 'Make a straight flush 1 time', 1, '🔥'),
       ('straightFlushMade', 'Straight Flush II', 'Make a straight flush 3 times', 3, '🔥'),
-      ('royalFlushMade', 'Royal Flush I', 'Make a royal flush 1 time', 1, '👑'),
-      ('royalFlushMade', 'Royal Flush II', 'Make a royal flush 3 times', 3, '👑')
+      ('royalFlushMade', 'Royal Flush', 'Make a royal flush 1 time', 1, '👑')
     ;`);
 
     await client.query('COMMIT');
     console.log('Migration completed successfully!');
     console.log('Tables created: users, clubs, hand_histories, challenges, challenge_definitions, user_challenge_progress');
-    console.log('Seed data: 73 milestone challenge definitions inserted');
+    console.log('Seed data: 72 milestone challenge definitions inserted');
     return { tables: ['users', 'clubs', 'hand_histories', 'challenges', 'challenge_definitions', 'user_challenge_progress'] };
   } catch (err) {
     await client.query('ROLLBACK');
