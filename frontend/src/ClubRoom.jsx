@@ -9,15 +9,16 @@ const PRESET_EMOJIS = ['😎', '🤡', '😱', '🔥', '💪', '🃏', '🍀', '
 // Seat positions for the oval table layout (clockwise from bottom-center)
 // Pushed up slightly to leave room for big hole cards + community cards below
 const SEAT_POSITIONS = [
-  // Option 1: Ellipse formula + Manual Tweaks
-  // Center (50,45), radii rx=36, ry=32 on a 4:3 table
-  // Angles tuned for 6-max layout (hero at bottom)
-  { top: 84, left: 50 },  // Seat 0: Hero — bottom center
-  { top: 64, left: 20 },  // Seat 1: Bottom-left
-  { top: 36, left: 10 },  // Seat 2: Mid-left (pushed outward)
-  { top: 11, left: 50 },  // Seat 3: Top center
-  { top: 36, left: 90 },  // Seat 4: Mid-right (pushed outward)
-  { top: 64, left: 80 },  // Seat 5: Bottom-right
+  // Ellipse-hugging layout for 4:3 racetrack oval.
+  // The table is rounded-[50%] with center (50,50), rx≈44, ry≈42.
+  // Each seat sits on the ellipse edge, hugging the rail.
+  // Side seats (1,2,4,5) are at the widest part of the ellipse.
+  { top: 91, left: 50 },  // Seat 0: Hero — bottom center, on curve
+  { top: 68, left: 10 },  // Seat 1: Lower-left, hugging the rail
+  { top: 32, left: 10 },  // Seat 2: Upper-left, hugging the rail
+  { top: 8,  left: 50 },  // Seat 3: Top center, on curve
+  { top: 32, left: 90 },  // Seat 4: Upper-right, hugging the rail
+  { top: 68, left: 90 },  // Seat 5: Lower-right, hugging the rail
 ];
 
 // ─── Card Sizes ──────────────────────────────────────────────
