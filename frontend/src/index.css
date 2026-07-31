@@ -412,3 +412,103 @@
 html {
   -webkit-text-size-adjust: 100%;
 }
+
+/* ================================================================
+   MOBILE HEIGHT FIX
+   Use dynamic viewport height (dvh) on mobile to account for
+   browser chrome (address bar, bottom nav bar).
+   ================================================================ */
+@supports (height: 100dvh) {
+  .min-h-screen-mobile {
+    min-height: 100dvh !important;
+  }
+  .h-screen-mobile {
+    height: 100dvh !important;
+  }
+}
+
+/* Fallback for browsers that don't support dvh */
+@supports not (height: 100dvh) {
+  .min-h-screen-mobile {
+    min-height: 100vh !important;
+  }
+  .h-screen-mobile {
+    height: 100vh !important;
+  }
+}
+
+/* Smaller card sizes on very small screens */
+@media (max-width: 380px) {
+  .felt-table {
+    border-width: 8px !important;
+  }
+}
+
+/* ================================================================
+   LANDSCAPE MODE (mobile rotated)
+   When the viewport is wider than it is tall, switch to a
+   horizontal layout: table on the left, controls on the right.
+   ================================================================ */
+@media (orientation: landscape) and (max-height: 500px) {
+  /* Switch from vertical flex to horizontal flex */
+  .landscape-row {
+    flex-direction: row !important;
+  }
+
+  /* Table takes the left side */
+  .landscape-table {
+    flex: 1 1 60% !important;
+    max-height: 100% !important;
+  }
+
+  /* Controls panel takes the right side */
+  .landscape-controls {
+    flex: 0 0 40% !important;
+    max-height: 100% !important;
+    overflow-y: auto !important;
+    border-top: none !important;
+    border-left: 1px solid rgba(255,255,255,0.08) !important;
+  }
+
+  /* Hide hole cards display in landscape (show avatars only) */
+  .landscape-hide-hole-cards {
+    display: none !important;
+  }
+
+  /* Reduce table border width */
+  .landscape-table .felt-table {
+    border-width: 6px !important;
+  }
+
+  /* Cards naturally get smaller because the table container is smaller */
+
+  /* Smaller community card gap */
+  .landscape-table .community-row {
+    gap: 4px !important;
+  }
+
+  /* Tighten padding on the controls panel */
+  .landscape-controls {
+    padding: 4px 8px !important;
+  }
+
+  /* Make action buttons more compact */
+  .landscape-controls .action-btn-fold,
+  .landscape-controls .action-btn-check,
+  .landscape-controls .action-btn-call {
+    padding: 4px 8px !important;
+    font-size: 10px !important;
+    min-height: 28px !important;
+  }
+
+  /* Hide bet slider in landscape */
+  .landscape-controls .bet-slider-container {
+    display: none !important;
+  }
+
+  /* Make preset buttons more compact */
+  .landscape-controls .preset-btn {
+    padding: 3px 6px !important;
+    font-size: 9px !important;
+  }
+}

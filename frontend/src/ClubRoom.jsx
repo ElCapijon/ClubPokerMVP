@@ -494,7 +494,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   // RENDER
   // =============================================================
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 flex flex-col overflow-hidden select-none">
+    <div className="min-h-screen-mobile bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 flex flex-col overflow-hidden select-none">
 
       {/* ── Connection Banner ── */}
       {!isConnected && (
@@ -583,7 +583,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       )}
 
       {/* ── Header Bar ── */}
-      <header className="bg-gray-900/80 backdrop-blur-sm border-b border-gray-800 px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between shrink-0">
+      <header className="bg-gray-900/80 backdrop-blur-sm border-b border-gray-800 px-2 sm:px-4 py-1.5 sm:py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button onClick={handleLeaveTable}
             className="text-gray-400 hover:text-white transition-colors p-1.5 -ml-1.5 shrink-0"
@@ -622,12 +622,16 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
       {/* ==============================================================
           MAIN GAME AREA — Two-row layout: Table on top, Cards + Controls below
+          In landscape mode (orientation:landscape + max-height:500px), switches
+          to a horizontal layout: table on left, controls on right.
           ============================================================== */}
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 landscape-row">
 
         {/* ── TOP ROW: Table + Players ── */}
-        <div className="flex-1 flex items-center justify-center p-1 sm:p-2 min-h-0">
-          <div className="relative w-full max-h-full" style={{ maxWidth: '800px', aspectRatio: '4/3' }}>
+        <div className="flex-1 flex items-center justify-center p-0.5 sm:p-2 min-h-0 landscape-table">
+          {/* On mobile (<640px), use a 5:3 ratio to save vertical space.
+              On desktop (>=640px), use the classic 4:3 ratio. */}
+          <div className="relative w-full max-h-full sm:aspect-[4/3] aspect-[5/3]" style={{ maxWidth: '800px', maxHeight: '100%' }}>
 
             {/* The Felt Table */}
             <div className="felt-table w-full h-full flex flex-col items-center justify-center relative overflow-hidden">
@@ -642,7 +646,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               />
 
               {/* ── Community Cards (positioned in the lower half of the felt) ── */}
-              <div className="flex items-center gap-2 sm:gap-3 mb-2 z-10">
+              <div className="flex items-center gap-2 sm:gap-3 mb-2 z-10 community-row">
                 {[0, 1, 2, 3, 4].map(i => (
                   <Card key={i} card={communityCards[i]} faceDown={!communityCards[i]} size="lg" dealDelay={i} />
                 ))}
@@ -800,8 +804,8 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         </div>
 
         {/* ── BOTTOM ROW: Your Hole Cards + Pot Info + Controls ── */}
-        <div className="shrink-0 bg-gray-900/95 backdrop-blur-sm border-t border-gray-800 px-3 sm:px-4 py-2 sm:py-3">
-          <div className="max-w-4xl mx-auto flex flex-col gap-1.5">
+        <div className="shrink-0 bg-gray-900/95 backdrop-blur-sm border-t border-gray-800 px-1.5 sm:px-4 py-1 sm:py-3 landscape-controls">
+          <div className="max-w-4xl mx-auto flex flex-col gap-0.5 sm:gap-1.5">
 
             {/* Last Action Bar */}
             {lastAction && gameState !== 'WAITING' && (
@@ -819,21 +823,21 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
             {/* ── Your Hole Cards (BIG — separate from seat) ── */}
             {gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
-              <div className="flex items-center justify-center gap-2 sm:gap-3 py-1">
+              <div className="flex items-center justify-center gap-1.5 sm:gap-3 py-0.5 sm:py-1 landscape-hide-hole-cards">
                 {holeCards.map((card, i) => (
                   <Card key={i} card={card} faceDown={false} size="xl" dealDelay={i} />
                 ))}
                 {myPlayerData && (
-                  <div className="flex items-center gap-3 ml-2 sm:ml-3 text-xs sm:text-sm">
-                    <span className="text-gray-400">Stack:</span>
+                  <div className="flex items-center gap-1.5 sm:gap-3 ml-1 sm:ml-3 text-[10px] sm:text-sm">
+                    <span className="text-gray-400 hidden sm:inline">Stack:</span>
                     <span className="text-poker-gold font-bold font-mono">${myPlayerData.stack?.toLocaleString() || 0}</span>
                   </div>
                 )}
                 {displayTimer > 0 && isMyTurn && (
-                  <div className={`flex items-center gap-1 px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm font-bold ${
+                  <div className={`flex items-center gap-1 px-1.5 sm:px-3 py-0.5 sm:py-1 rounded-full text-[10px] sm:text-sm font-bold ${
                     displayTimer <= 5 ? 'bg-red-900/70 text-red-300 animate-pulse' : 'bg-gray-800 text-gray-200'
                   }`}>
-                    <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     {displayTimer}s
@@ -920,7 +924,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
                   {/* ── Bet slider + presets ── */}
                   {canAct && myStack > 0 && (
-                    <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-center">
+                    <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-center bet-slider-container">
                       <div className="flex items-center gap-0.5 sm:gap-1">
                         <button onClick={() => handleAction(isRaiseContext ? 'raise' : 'bet', getBetPreset(0.5))}
                           className="preset-btn">½ Pot</button>
