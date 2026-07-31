@@ -884,9 +884,7 @@ io.on('connection', (socket) => {
     } catch (err) {
       callback({ error: 'Failed to get stake levels' });
     }
-  });
-
-  // ---------- JOIN RING GAME (by stake level) ----------
+  });      // ---------- JOIN RING GAME (by stake level) ----------
   socket.on('join_ring_game', async ({ stakeLevel, buyinAmount }, callback) => {
     try {
       const userId = socket.userId;
@@ -895,13 +893,13 @@ io.on('connection', (socket) => {
       // Validate stake level
       const config = STAKE_LEVELS[stakeLevel];
       if (!config) {
-        return callback({ error: 'Invalid stake level' });
+        return callback && callback({ error: 'Invalid stake level' });
       }
 
       // Validate buy-in
       const buyin = parseInt(buyinAmount);
       if (!buyin || buyin < config.minBuyin || buyin > config.maxBuyin) {
-        return callback({ error: `Buy-in must be between ${config.minBuyin} and ${config.maxBuyin} chips` });
+        return callback && callback({ error: `Buy-in must be between ${config.minBuyin} and ${config.maxBuyin} chips` });
       }
 
       // Check bankroll
@@ -910,15 +908,15 @@ io.on('connection', (socket) => {
         newBankroll = await deductBankroll(userId, buyin);
       } catch (e) {
         if (e.message === 'USER_NOT_FOUND') {
-          return callback({ error: 'SESSION_EXPIRED', redirect: 'auth' });
+          return callback && callback({ error: 'SESSION_EXPIRED', redirect: 'auth' });
         }
-        return callback({ error: `Insufficient bankroll. You have less than ${buyin} chips.` });
+        return callback && callback({ error: `Insufficient bankroll. You have less than ${buyin} chips.` });
       }
 
       // Find or create a table at this stake level
       const result = findOrCreateTable(stakeLevel);
       if (!result) {
-        return callback({ error: 'Failed to find or create a table' });
+        return callback && callback({ error: 'Failed to find or create a table' });
       }
 
       const { game, seatIndex, isNew } = result;
@@ -974,7 +972,7 @@ io.on('connection', (socket) => {
         };
       });
 
-      callback(null, {
+      callback && callback(null, {
         gameId,
         tableName: game.tableName,
         stakeLevel,
@@ -996,7 +994,7 @@ io.on('connection', (socket) => {
       checkAutoStart(gameId);
     } catch (err) {
       console.error('[Join Ring Game Error]', err);
-      callback({ error: 'Failed to join ring game' });
+      callback && callback({ error: 'Failed to join ring game' });
     }
   });
 
@@ -1005,18 +1003,18 @@ io.on('connection', (socket) => {
     try {
       const playerInfo = socketToPlayer.get(socket.id);
       if (!playerInfo || playerInfo.gameId !== gameId) {
-        return callback({ error: 'Not at this table' });
+        return callback && callback({ error: 'Not at this table' });
       }
 
       const game = ringGames.get(gameId);
       if (!game) {
         socketToPlayer.delete(socket.id);
-        return callback({ error: 'Table not found' });
+        return callback && callback({ error: 'Table not found' });
       }
 
       const seat = game.seats[playerInfo.seatIndex];
       if (!seat || seat.userId !== socket.userId) {
-        return callback({ error: 'Not seated at this table' });
+        return callback && callback({ error: 'Not seated at this table' });
       }
 
       const cashOutAmount = seat.stack || 0;
@@ -1069,11 +1067,11 @@ io.on('connection', (socket) => {
 
       console.log(`[Cash Out] ${seat.userName} cashed out ${cashOutAmount} chips from "${game.tableName}"`);
 
-      callback(null, { cashOutAmount, bankroll: newBankroll });
+      callback && callback(null, { cashOutAmount, bankroll: newBankroll });
       broadcastTableState(gameId);
     } catch (err) {
       console.error('[Leave Ring Game Error]', err);
-      callback({ error: 'Failed to cash out' });
+      callback && callback({ error: 'Failed to cash out' });
     }
   });
 
@@ -1273,12 +1271,12 @@ io.on('connection', (socket) => {
   // ---------- REJOIN RING GAME ----------
   socket.on('rejoin_ring_game', ({ gameId }, callback) => {
     const game = ringGames.get(gameId);
-    if (!game) return callback({ error: 'Table not found' });
+    if (!game) return callback && callback({ error: 'Table not found' });
 
     const userId = socket.userId;
 
     const seatIndex = game.seats.findIndex(s => s && s.userId === userId);
-    if (seatIndex === -1) return callback({ error: 'Player not found at this table' });
+    if (seatIndex === -1) return callback && callback({ error: 'Player not found at this table' });
 
     const seat = game.seats[seatIndex];
     seat.isConnected = true;
@@ -1293,7 +1291,7 @@ io.on('connection', (socket) => {
     socket.join(gameRoom(gameId));
     socketToPlayer.set(socket.id, { gameId, userId, seatIndex });
 
-    callback(null, {
+    callback && callback(null, {
       gameId: game.id,
       tableName: game.tableName,
       userId,

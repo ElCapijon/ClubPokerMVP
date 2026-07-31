@@ -334,8 +334,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     socket.on('connect_error', onConnectError);
 
     if (socket.connected) {
-      // Request full state update on reconnection to this room
-      setTimeout(() => socket.emit('rejoin_ring_game', { gameId: clubId }), 100);
       onConnect();
     } else {
       socket.connect();
