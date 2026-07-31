@@ -231,5 +231,96 @@ describe('PotSplitter', () => {
       expect(sidePot.winners.length).toBe(1);
       expect(sidePot.winners[0].playerIndex).toBe(0);
     });
+
+    // ============================================================
+    // Tricky split-pot scenario: tie in main pot, different winner in side pot
+    // ============================================================
+    test('should split main pot between tied players and award side pot to the best hand', () => {
+      // 3-way all-in: P1 (100 chips), P2 (300 chips), P3 (300 chips)
+      // Main pot: 300 (100 x 3), eligible: [P1, P2, P3]
+      // Side pot: 400 (200 x 2), eligible: [P2, P3]
+      //
+      // Hand evaluation:
+      // Board: A♣ K♠ Q♥ 2♦ 3♣ — no pair on board
+      // P1 (A♥ K♥): A,A,K,K,Q -> Two Pair (Aces & Kings) — TIED with P2
+      // P2 (A♦ K♦): A,A,K,K,Q -> Two Pair (Aces & Kings) — TIED with P1
+      // P3 (9♠ 8♠): A,K,Q,9,8 -> High Card (Ace-high) — loses to both
+      //
+      // Expected:
+      //   Main pot (300): P1 and P2 each get 150 (split pot from tie)
+      //   Side pot (400): P2 wins all 400 (P2 is best among eligible [P2,P3],
+      //                   since P1 is not eligible for the side pot)
+      //
+      // This proves split-pot logic works alongside side-pot eligibility:
+      // the main pot winners are different from the side pot winner distribution
+      // (P1 wins 150 in main pot but 0 in side pot).
+      const community = [
+        c('A', 'clubs'), c('K', 'spades'), c('Q', 'hearts'),
+        c('2', 'diamonds'), c('3', 'hearts'),
+      ];
+
+      const players = [
+        {
+          playerIndex: 0,
+          holeCards: [c('A', 'hearts'), c('K', 'hearts')],
+          stack: 0,
+          betAmount: 100,
+          isAllIn: true,
+          isFolded: false,
+        },
+        {
+          playerIndex: 1,
+          holeCards: [c('A', 'diamonds'), c('K', 'diamonds')],
+          stack: 0,
+          betAmount: 300,
+          isAllIn: true,
+          isFolded: false,
+        },
+        {
+          playerIndex: 2,
+          holeCards: [c('9', 'spades'), c('8', 'spades')],
+          stack: 0,
+          betAmount: 300,
+          isAllIn: true,
+          isFolded: false,
+        },
+      ];
+
+      const result = determineWinners(players, community);
+
+      // Should be 2 pots:
+      // Level 1 (100 x 3 = 300): Main pot — P1, P2, P3 all eligible
+      // Level 2 (200 x 2 = 400): Side pot — P2 and P3 eligible
+      expect(result.length).toBe(2);
+
+      // ── Main pot: level 100, 300 chips, split between P1 and P2 (tied) ──
+      const mainPot = result.find(r => r.level === 100);
+      expect(mainPot).toBeDefined();
+      expect(mainPot.potAmount).toBe(300);
+      expect(mainPot.winners.length).toBe(2);
+
+      // Both P1 and P2 should be winners of the main pot
+      const mainWinnerIndices = mainPot.winners.map(w => w.playerIndex).sort();
+      expect(mainWinnerIndices).toEqual([0, 1]);
+
+      // Each should get exactly half (150 each)
+      expect(mainPot.winners[0].amountWon).toBe(150);
+      expect(mainPot.winners[1].amountWon).toBe(150);
+
+      // P3 should NOT be a winner of the main pot (worse hand)
+      expect(mainPot.winners.find(w => w.playerIndex === 2)).toBeUndefined();
+
+      // ── Side pot: level 300, 400 chips, won entirely by P2 ──
+      // P2 ties with P1, but P1 is not eligible for the side pot (only bet 100),
+      // so P2 wins the side pot alone (best hand among eligible: P2, P3).
+      // This demonstrates side pot eligibility creating a different winner distribution
+      // than the main pot split.
+      const sidePot = result.find(r => r.level === 300);
+      expect(sidePot).toBeDefined();
+      expect(sidePot.potAmount).toBe(400);
+      expect(sidePot.winners.length).toBe(1);
+      expect(sidePot.winners[0].playerIndex).toBe(1);
+      expect(sidePot.winners[0].amountWon).toBe(400);
+    });
   });
 });

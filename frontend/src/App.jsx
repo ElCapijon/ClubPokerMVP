@@ -38,6 +38,7 @@ const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'h
 export default function App() {
   const [view, setView] = useState('auth');
   const [authView, setAuthView] = useState('login');
+  const [resetToken, setResetToken] = useState('');
   const [gameData, setGameData] = useState(null);
   const [displayName, setDisplayName] = useState('');
   const [reconnectError, setReconnectError] = useState('');
@@ -56,6 +57,16 @@ export default function App() {
         }
       }
     } catch (e) { /* ignore */ }
+
+    // Check URL for password reset token
+    const params = new URLSearchParams(window.location.search);
+    const tokenFromUrl = params.get('token');
+    if (tokenFromUrl) {
+      setResetToken(tokenFromUrl);
+      setAuthView('reset-password');
+      // Clean the URL without reloading
+      window.history.replaceState({}, '', window.location.pathname);
+    }
 
     const auth = loadAuth();
     if (auth && auth.token && auth.user) {
@@ -292,6 +303,16 @@ export default function App() {
             <LoginForm
               onLogin={handleLogin}
               onSwitch={() => setAuthView('signup')}
+              onForgotPassword={() => setAuthView('forgot-password')}
+            />
+          ) : authView === 'forgot-password' ? (
+            <ForgotPasswordForm
+              onBack={() => setAuthView('login')}
+            />
+          ) : authView === 'reset-password' ? (
+            <ResetPasswordForm
+              token={resetToken}
+              onComplete={() => setAuthView('login')}
             />
           ) : (
             <SignupForm
@@ -309,8 +330,205 @@ export default function App() {
   );
 }
 
+// ─── Forgot Password Form ────────────────────────────────────
+function ForgotPasswordForm({ onBack }) {
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!email) {
+      setError('Please enter your email');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      setSent(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (sent) {
+    return (
+      <div className="text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-900/30 border border-green-700/50 mb-4">
+          <span className="text-3xl">📧</span>
+        </div>
+        <h3 className="text-lg font-bold text-white mb-2">Check Your Email</h3>
+        <p className="text-sm text-gray-400 mb-6 leading-relaxed">
+          If that email is registered, you'll receive a password reset link shortly.
+        </p>
+        <button onClick={onBack}
+          className="text-sm text-poker-gold hover:text-yellow-400 font-medium transition-colors">
+          ← Back to Sign In
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <h2 className="text-xl font-bold text-white text-center mb-2">Reset Password</h2>
+      <p className="text-sm text-gray-400 text-center mb-4">
+        Enter your email and we'll send you a reset link.
+      </p>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-300 mb-1">Email</label>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          className="input-field"
+          autoFocus
+        />
+      </div>
+
+      {error && (
+        <div className="bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
+          <div className="flex items-center gap-2">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="btn-primary w-full py-3 flex items-center justify-center gap-2"
+      >
+        {loading ? (
+          <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+        ) : (
+          <>
+            <span>📨</span>
+            Send Reset Link
+          </>
+        )}
+      </button>
+
+      <p className="text-center text-sm text-gray-400">
+        <button type="button" onClick={onBack}
+          className="text-poker-gold hover:text-yellow-400 font-medium transition-colors">
+          ← Back to Sign In
+        </button>
+      </p>
+    </form>
+  );
+}
+
+// ─── Reset Password Form ─────────────────────────────────────
+function ResetPasswordForm({ token, onComplete }) {
+  const [newPassword, setNewPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!newPassword || newPassword.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Reset failed');
+      setSuccess(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (success) {
+    return (
+      <div className="text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-900/30 border border-green-700/50 mb-4">
+          <span className="text-3xl">✅</span>
+        </div>
+        <h3 className="text-lg font-bold text-white mb-2">Password Reset!</h3>
+        <p className="text-sm text-gray-400 mb-6 leading-relaxed">
+          Your password has been updated. You can now sign in with your new password.
+        </p>
+        <button onClick={onComplete}
+          className="text-sm text-poker-gold hover:text-yellow-400 font-medium transition-colors">
+          Sign In →
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <h2 className="text-xl font-bold text-white text-center mb-2">Set New Password</h2>
+      <p className="text-sm text-gray-400 text-center mb-4">
+        Choose a new password for your account.
+      </p>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-300 mb-1">New Password</label>
+        <input
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="At least 6 characters"
+          className="input-field"
+          autoFocus
+        />
+      </div>
+
+      {error && (
+        <div className="bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
+          <div className="flex items-center gap-2">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="btn-primary w-full py-3 flex items-center justify-center gap-2"
+      >
+        {loading ? (
+          <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+        ) : (
+          <>
+            <span>🔒</span>
+            Reset Password
+          </>
+        )}
+      </button>
+    </form>
+  );
+}
+
 // ─── Login Form ──────────────────────────────────────────────
-function LoginForm({ onLogin, onSwitch }) {
+function LoginForm({ onLogin, onSwitch, onForgotPassword }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -384,13 +602,19 @@ function LoginForm({ onLogin, onSwitch }) {
         )}
       </button>
 
-      <p className="text-center text-sm text-gray-400">
-        Don't have an account?{' '}
-        <button type="button" onClick={onSwitch}
-          className="text-poker-gold hover:text-yellow-400 font-medium transition-colors">
-          Sign Up
+      <div className="flex items-center justify-between mt-2">
+        <p className="text-center text-sm text-gray-400">
+          Don't have an account?{' '}
+          <button type="button" onClick={onSwitch}
+            className="text-poker-gold hover:text-yellow-400 font-medium transition-colors">
+            Sign Up
+          </button>
+        </p>
+        <button type="button" onClick={onForgotPassword}
+          className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
+          Forgot Password?
         </button>
-      </p>
+      </div>
     </form>
   );
 }

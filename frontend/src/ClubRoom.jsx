@@ -845,54 +845,52 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
             {/* ── Controls Row ── */}
             <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
 
-              {/* ===================== WAITING STATE ===================== */}
-              {gameState === 'WAITING' && (
+              {/* ===================== BUSTED / REBUY ===================== */}
+              {/* Show rebuy button whenever the player is busted (stack=0),
+                  regardless of game state. This lets them rebuy immediately
+                  after losing a hand, without waiting for the game to return
+                  to WAITING state. */}
+              {(myPlayerData?.stack === 0 || myPlayerData?.stack === undefined) && (
                 <>
-                  {/* Busted */}
-                  {(myPlayerData?.stack === 0 || myPlayerData?.stack === undefined) && (
-                    <>
-                      <button onClick={handleRebuy}
-                        className="px-4 py-2 bg-gradient-to-r from-poker-gold to-yellow-500 text-black font-bold rounded-xl
-                                   hover:from-yellow-400 hover:to-yellow-300 transition-all duration-200 active:scale-95
-                                   shadow-lg shadow-yellow-600/20 text-xs">
-                        💰 Rebuy (${clubData?.minBuyin || 50} chips)
-                      </button>
-                      <button onClick={handleSitOutToggle}
-                        className={`px-4 py-2 rounded-xl font-semibold text-xs transition-all duration-200 active:scale-95 ${
-                          myPlayerData?.isSittingOut
-                            ? 'bg-green-600 text-white'
-                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                        }`}>
-                        {myPlayerData?.isSittingOut ? 'Sit Back In' : 'Sit Out'}
-                      </button>
-                    </>
-                  )}
+                  <button onClick={handleRebuy}
+                    className="px-4 py-2 bg-gradient-to-r from-poker-gold to-yellow-500 text-black font-bold rounded-xl
+                               hover:from-yellow-400 hover:to-yellow-300 transition-all duration-200 active:scale-95
+                               shadow-lg shadow-yellow-600/20 text-xs">
+                    💰 Rebuy (${clubData?.minBuyin || 50} chips)
+                  </button>
+                  <button onClick={handleSitOutToggle}
+                    className={`px-4 py-2 rounded-xl font-semibold text-xs transition-all duration-200 active:scale-95 ${
+                      myPlayerData?.isSittingOut
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    }`}>
+                    {myPlayerData?.isSittingOut ? 'Sit Back In' : 'Sit Out'}
+                  </button>
+                </>
+              )}
 
+              {/* ===================== WAITING STATE ===================== */}
+              {gameState === 'WAITING' && (myPlayerData?.stack > 0) && (
+                <>
                   {/* Normal ready */}
-                  {(myPlayerData?.stack > 0) && (
-                    <>
-                      <button onClick={handleReadyToggle}
-                        className={`px-4 py-2 rounded-xl font-semibold text-xs transition-all duration-200 active:scale-95 ${
-                          players[mySeatIndex]?.isReady
-                            ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                            : 'bg-gradient-to-r from-green-600 to-green-500 text-white shadow-lg shadow-green-600/20'
-                        }`}>
-                        {players[mySeatIndex]?.isReady ? 'Not Ready' : 'Ready'}
-                      </button>
-                      <button onClick={handleSitOutToggle}
-                        className="px-4 py-2 bg-gray-700 text-gray-300 hover:bg-gray-600 rounded-xl font-semibold text-xs transition-all active:scale-95">
-                        {myPlayerData?.isSittingOut ? 'Back In' : 'Sit Out'}
-                      </button>
-                    </>
-                  )}
+                  <button onClick={handleReadyToggle}
+                    className={`px-4 py-2 rounded-xl font-semibold text-xs transition-all duration-200 active:scale-95 ${
+                      players[mySeatIndex]?.isReady
+                        ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        : 'bg-gradient-to-r from-green-600 to-green-500 text-white shadow-lg shadow-green-600/20'
+                    }`}>
+                    {players[mySeatIndex]?.isReady ? 'Not Ready' : 'Ready'}
+                  </button>
+                  <button onClick={handleSitOutToggle}
+                    className="px-4 py-2 bg-gray-700 text-gray-300 hover:bg-gray-600 rounded-xl font-semibold text-xs transition-all active:scale-95">
+                    {myPlayerData?.isSittingOut ? 'Back In' : 'Sit Out'}
+                  </button>
 
                   {isHost && (
-                    <>
-                      <button onClick={handleStartGame} disabled={connectedPlayers.length < 2}
-                        className="btn-primary px-4 py-2 text-xs">
-                        Start Game
-                      </button>
-                    </>
+                    <button onClick={handleStartGame} disabled={connectedPlayers.length < 2}
+                      className="btn-primary px-4 py-2 text-xs">
+                      Start Game
+                    </button>
                   )}
                 </>
               )}

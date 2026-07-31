@@ -14,3 +14,9 @@ services:
         sync: false
       - key: CORS_ORIGIN
         value: ""
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        value: onboarding@resend.dev
+      - key: APP_URL
+        value: https://your-app-url.onrender.com

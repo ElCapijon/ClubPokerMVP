@@ -24,6 +24,8 @@ async function migrate() {
         password_hash VARCHAR(255) NOT NULL,
         avatar_color VARCHAR(7) DEFAULT '#FFD700',
         bankroll BIGINT NOT NULL DEFAULT 10000,
+        reset_token VARCHAR(255),
+        reset_token_expires TIMESTAMP,
         total_wins INT DEFAULT 0,
         hands_played INT DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW()

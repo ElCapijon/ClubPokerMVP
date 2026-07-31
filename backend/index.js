@@ -9,7 +9,7 @@ const jwt = require('jsonwebtoken');
 const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction } = require('./GameHand');
 const ChallengeTracker = require('./ChallengeTracker');
 const pool = require('./db');
-
+const { sendWelcomeEmail, sendPasswordResetEmail } = require('./email');
 // Map rank number to stat name for hand rank tracking
 const RANK_STATS = {
   2: 'pairMade',
@@ -29,7 +29,20 @@ const PORT = process.env.PORT || 3000;
 const MAX_SEATS = 6;
 const isProduction = process.env.NODE_ENV === 'production';
 const JWT_SECRET = process.env.JWT_SECRET || 'poker_club_jwt_secret_change_in_prod';
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
+// ============================================================
+// Password Reset Token Helpers
+// ============================================================
+const crypto = require('crypto');
+
+function generateResetToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function getResetTokenExpiry() {
+  return new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+}
 // ============================================================
 // Express Setup
 // ============================================================
@@ -263,6 +276,11 @@ app.post('/api/auth/register', async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    // Send welcome email (non-blocking — don't fail registration if email fails)
+    sendWelcomeEmail(user.email, user.display_name).catch(err => {
+      console.error('[Register] Welcome email failed:', err.message);
+    });
+
     res.status(201).json({
       user: {
         id: user.id,
@@ -276,6 +294,88 @@ app.post('/api/auth/register', async (req, res) => {
   } catch (err) {
     console.error('[Register Error]', err);
     res.status(500).json({ error: 'Failed to register' });
+  }
+});
+
+// ============================================================
+// Password Reset Routes
+// ============================================================
+
+// POST /api/auth/forgot-password — Request a password reset email
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Check if user exists
+    const result = await pool.query('SELECT id, email, display_name FROM users WHERE email = $1', [email]);
+    if (result.rows.length === 0) {
+      // Don't reveal whether the email exists — return success either way
+      return res.json({ success: true, message: 'If that email is registered, a reset link has been sent.' });
+    }
+
+    const user = result.rows[0];
+    const resetToken = generateResetToken();
+    const expiresAt = getResetTokenExpiry();
+
+    // Save the token and expiry in the database
+    await pool.query(
+      'UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE id = $3',
+      [resetToken, expiresAt, user.id]
+    );
+
+    // Send the email (non-blocking)
+    sendPasswordResetEmail(user.email, resetToken).catch(err => {
+      console.error('[ForgotPassword] Email send failed:', err.message);
+    });
+
+    res.json({ success: true, message: 'If that email is registered, a reset link has been sent.' });
+  } catch (err) {
+    console.error('[ForgotPassword Error]', err);
+    res.status(500).json({ error: 'Failed to process request' });
+  }
+});
+
+// POST /api/auth/reset-password — Confirm the reset and set a new password
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: 'Token and new password are required' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+
+    // Find user with this token that hasn't expired
+    const result = await pool.query(
+      'SELECT id, email, display_name FROM users WHERE reset_token = $1 AND reset_token_expires > NOW()',
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    const user = result.rows[0];
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password and clear the reset token
+    await pool.query(
+      'UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2',
+      [hashedPassword, user.id]
+    );
+
+    console.log(`[ResetPassword] Password reset for ${user.email}`);
+
+    res.json({ success: true, message: 'Password has been reset successfully. You can now sign in.' });
+  } catch (err) {
+    console.error('[ResetPassword Error]', err);
+    res.status(500).json({ error: 'Failed to reset password' });
   }
 });
 
