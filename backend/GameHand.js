@@ -136,6 +136,7 @@ function startHand(hand) {
   sbPlayer.roundBet = sbAmount;
   sbPlayer.postedBlind = sbAmount;
   sbPlayer.hasActed = true;
+  if (sbPlayer.stack <= 0) sbPlayer.isAllIn = true; // Short-stack blind → all-in
 
   bbPlayer.stack -= bbAmount;
   bbPlayer.betAmount = bbAmount;
@@ -148,6 +149,12 @@ function startHand(hand) {
   // isRoundComplete() would end the round as soon as the last other player
   // calls, skipping the BB's turn entirely. The SB is safe to mark acted
   // because their roundBet (< currentBet) still forces them to act.
+  //
+  // However, if the blind itself empties a player's stack, they must be marked
+  // all-in immediately. Otherwise a 0-chip "all-in" player is treated as a live
+  // actor: the round won't auto-advance, and they get prompted to check/raise
+  // (or a bot may even fold them) instead of the hand running out the streets.
+  if (bbPlayer.stack <= 0) bbPlayer.isAllIn = true; // Short-stack blind → all-in
 
   hand.pot = sbAmount + bbAmount;
   hand.currentBet = bbAmount;
@@ -398,6 +405,7 @@ function getPublicState(hand) {
       userName: p.userName,
       stack: p.stack,
       betAmount: p.betAmount,
+      roundBet: p.roundBet, // bet in the current betting round (reset each street)
       isFolded: p.isFolded,
       isAllIn: p.isAllIn,
       hasActed: p.hasActed,
@@ -443,6 +451,25 @@ function shuffleDeck(deck) {
     [d[i], d[j]] = [d[j], d[i]];
   }
   return d;
+}
+
+/**
+ * Advance the hand through every street whose betting round is already
+ * complete (e.g. all remaining players are all-in, or only one player
+ * remains). Handles all-in runouts: when everyone left is all-in there is
+ * nobody to act, so the remaining streets deal straight through to showdown.
+ * Without this, the hand would stall mid-hand (e.g. stuck on the flop) with
+ * currentPlayerIndex = -1 and no one to trigger the next street.
+ */
+function advanceCompleteRounds(hand) {
+  while (isRoundComplete(hand) && hand.gameStatus !== GAME_STATES.SHOWDOWN && !isHandComplete(hand)) {
+    if (hand.gameStatus === GAME_STATES.RIVER || hand.players.filter(p => !p.isFolded).length <= 1) {
+      goToShowdown(hand);
+    } else {
+      advanceStreet(hand);
+    }
+  }
+  return hand;
 }
 
 /**
@@ -569,18 +596,7 @@ function handleAction(hand, seatIndex, action, amount) {
 
   // Check if round is complete
   if (isRoundComplete(hand)) {
-    // Keep advancing streets while the round is still complete. This handles
-    // all-in runouts: when everyone remaining is all-in there is nobody left
-    // to act, so we deal the remaining streets straight through to showdown.
-    // Without this loop the hand would stall mid-hand (e.g. stuck on the flop)
-    // with currentPlayerIndex = -1 and no one to trigger the next street.
-    while (isRoundComplete(hand) && hand.gameStatus !== GAME_STATES.SHOWDOWN && !isHandComplete(hand)) {
-      if (hand.gameStatus === GAME_STATES.RIVER || hand.players.filter(p => !p.isFolded).length <= 1) {
-        goToShowdown(hand);
-      } else {
-        advanceStreet(hand);
-      }
-    }
+    advanceCompleteRounds(hand);
   } else {
     // Move to next player
     hand.currentPlayerIndex = getNextActivePlayerIndex(hand, playerIndex);
@@ -597,6 +613,7 @@ module.exports = {
   getNextActivePlayerIndex,
   isRoundComplete,
   advanceStreet,
+  advanceCompleteRounds,
   goToShowdown,
   isHandComplete,
   getPublicState,

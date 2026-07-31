@@ -206,6 +206,7 @@ WAITING → PREFLOP → FLOP → TURN → RIVER → SHOWDOWN → HAND_COMPLETE �
 | `startHand(hand)` | Shuffles deck, deals 2 hole cards each, posts blinds, sets first turn (UTG). |
 | `handleAction(hand, seatIndex, action, amount)` | Core action processor. Validates turn, processes fold/check/call/raise, manages pot, checks for all-in, advances round/street/showdown. |
 | `advanceStreet(hand)` | Advances PREFLOP→FLOP→TURN→RIVER→SHOWDOWN. Burns a card before dealing each street. Resets round bets and `hasActed` flags. |
+| `advanceCompleteRounds(hand)` | Advances every street whose betting round is already complete (all-in runouts). When everyone remaining is all-in there's nobody to act, so the remaining streets deal straight through to showdown instead of stalling. |
 | `goToShowdown(hand)` | Evaluates all active players' hands, calls PotSplitter to determine winners, awards pot to stacks, sets gameStatus to HAND_COMPLETE. |
 | `getNextActivePlayerIndex(hand, fromIndex)` | Returns the next player clockwise who hasn't folded or gone all-in. |
 | `isRoundComplete(hand)` | Checks: all non-all-in players acted and matched bet, OR only 1 player remains, OR all remaining are all-in. |
@@ -218,6 +219,7 @@ WAITING → PREFLOP → FLOP → TURN → RIVER → SHOWDOWN → HAND_COMPLETE �
 - Big Blind = next player after SB (min of BB amount and player's stack)
 - SB posts and `hasActed` is set to true (pre-flop only)
 - BB posts the blind but is **not** marked `hasActed` — this preserves the BB's pre-flop "option": when action returns to them after everyone calls, they get a turn to check or raise instead of the round ending early
+- If a blind empties a player's stack (short stack ≤ blind), they are **marked all-in immediately** — otherwise a 0-chip "all-in" player would be treated as a live actor, blocking street auto-advance and getting prompted to check/raise (or folded by a bot)
 - First to act pre-flop = player left of BB (UTG)
 - First to act post-flop = first active player left of dealer
 

@@ -1,6 +1,6 @@
 const {
   GAME_STATES, createHand, startHand, handleAction,
-  getNextActivePlayerIndex, isRoundComplete, advanceStreet
+  getNextActivePlayerIndex, isRoundComplete, advanceStreet, advanceCompleteRounds
 } = require('../GameHand');
 
 function createClubState() {
@@ -325,6 +325,100 @@ describe('Phase 4 - Action Edge Cases', () => {
 
       // After 2 folds, only 1 player remains, round should be complete
       expect(isRoundComplete(hand)).toBe(true);
+    });
+  });
+
+  describe('Short-stack blinds & all-in street progression', () => {
+    test('SB posting a blind that empties their stack is marked all-in', () => {
+      const club = createClubState();
+      club.seats[1] = { userId: 'u2', userName: 'Bob', stack: 10, isConnected: true }; // exactly SB
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      const sb = hand.players[1];
+      expect(sb.stack).toBe(0);
+      expect(sb.isAllIn).toBe(true);
+    });
+
+    test('BB posting a blind that empties their stack is marked all-in', () => {
+      const club = createClubState();
+      club.seats[2] = { userId: 'u3', userName: 'Charlie', stack: 20, isConnected: true }; // exactly BB
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      const bb = hand.players[2];
+      expect(bb.stack).toBe(0);
+      expect(bb.isAllIn).toBe(true);
+    });
+
+    test('short-stack BB (all-in from blind) is never asked to act; streets auto-advance', () => {
+      const club = createClubState();
+      club.seats[0] = { userId: 'u1', userName: 'Alice', stack: 100, isConnected: true };
+      club.seats[1] = { userId: 'u2', userName: 'Bob', stack: 100, isConnected: true };
+      club.seats[2] = { userId: 'u3', userName: 'Charlie', stack: 20, isConnected: true }; // exactly BB
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      expect(hand.players[2].isAllIn).toBe(true);
+
+      const aliceSeat = hand.players[0].seatIndex;
+      const bobSeat = hand.players[1].seatIndex;
+
+      // Alice shoves all-in
+      const r1 = handleAction(hand, aliceSeat, 'raise', 100);
+      expect(r1.error).toBeNull();
+      // Turn goes to Bob — never to the all-in BB
+      expect(hand.players[hand.currentPlayerIndex].seatIndex).toBe(bobSeat);
+
+      // Bob calls all-in → everyone is all-in → board runs out automatically
+      const r2 = handleAction(hand, bobSeat, 'raise', 100);
+      expect(r2.error).toBeNull();
+      expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
+      expect(hand.communityCards.length).toBe(5);
+      expect(hand.handResult).toBeDefined();
+    });
+
+    test('all-in BB is skipped on later streets; only live players act', () => {
+      const club = createClubState();
+      club.seats[2] = { userId: 'u3', userName: 'Charlie', stack: 20, isConnected: true }; // exactly BB
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      expect(hand.players[2].isAllIn).toBe(true);
+
+      // Alice and Bob call the 20 blind → round completes → flop
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+
+      // Everyone still live checks every street; the all-in BB is never the
+      // current player, and the hand runs all the way to showdown.
+      const bbSeat = hand.players[2].seatIndex;
+      let guard = 0;
+      while (hand.gameStatus !== GAME_STATES.HAND_COMPLETE && guard < 12) {
+        guard++;
+        const cur = hand.players[hand.currentPlayerIndex];
+        expect(cur.seatIndex).not.toBe(bbSeat);
+        const r = handleAction(hand, cur.seatIndex, 'check');
+        expect(r.error).toBeNull();
+      }
+      expect(hand.communityCards.length).toBe(5);
+    });
+
+    test('heads-up where both blinds are all-in runs out via advanceCompleteRounds', () => {
+      const club = createClubState();
+      club.seats[2] = null; // heads-up
+      club.seats[0] = { userId: 'u1', userName: 'Alice', stack: 20, isConnected: true }; // dealer/BB
+      club.seats[1] = { userId: 'u2', userName: 'Bob', stack: 10, isConnected: true };   // SB
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      expect(hand.players[0].isAllIn).toBe(true);
+      expect(hand.players[1].isAllIn).toBe(true);
+
+      advanceCompleteRounds(hand);
+      expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
+      expect(hand.communityCards.length).toBe(5);
     });
   });
 

@@ -6,7 +6,7 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction } = require('./GameHand');
+const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction, advanceCompleteRounds, getNextActivePlayerIndex } = require('./GameHand');
 const ChallengeTracker = require('./ChallengeTracker');
 const HandStats = require('./HandStats');
 const pool = require('./db');
@@ -771,7 +771,32 @@ function setActionTimer(gameId) {
   if (hand.gameStatus === GAME_STATES.SHOWDOWN || hand.gameStatus === GAME_STATES.HAND_COMPLETE) return;
 
   const currentPlayer = hand.players[hand.currentPlayerIndex];
-  if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) return;
+  if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) {
+    // Defensive: nobody can act at the current index. This only happens when
+    // a betting round is already complete — e.g. everyone remaining is all-in
+    // (possibly from short-stack blinds). Run out the remaining streets to
+    // showdown so the game never stalls waiting on a phantom turn.
+    advanceCompleteRounds(hand);
+    game.gameState = hand.gameStatus; // keep ring-game state in sync with the hand
+    if (isHandComplete(hand)) {
+      for (const hp of hand.players) {
+        const s = game.seats[hp.seatIndex];
+        if (s) s.stack = hp.stack;
+      }
+      broadcastGameState(gameId);
+      handleHandComplete(gameId, hand);
+      return;
+    }
+    // Round not complete but the current index is unusable — advance to the
+    // next player who can actually act.
+    hand.currentPlayerIndex = getNextActivePlayerIndex(hand, hand.currentPlayerIndex);
+    hand.actionStartTime = Date.now();
+    if (hand.currentPlayerIndex >= 0) {
+      broadcastGameState(gameId);
+      setActionTimer(gameId);
+    }
+    return;
+  }
 
   const seatIdx = currentPlayer.seatIndex;
   const seat = game.seats[seatIdx];

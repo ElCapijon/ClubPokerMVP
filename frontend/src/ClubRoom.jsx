@@ -34,6 +34,23 @@ const BET_CHIP_POSITIONS = SEAT_POSITIONS.map((pos, i) => ({
   left: pos.left + (50 - pos.left) * BET_CHIP_FRACTIONS[i],
 }));
 
+// Where flying bet chips land — the pot area at the center of the felt
+const POT_POSITION = { top: 50, left: 50 };
+
+// Format a chip amount for display (e.g. $1.2K, $2.5M).
+function formatBetLabel(amt) {
+  if (!amt) return '';
+  // Round to 1 decimal first, then promote K→M if rounding pushed
+  // the value up to 1000 (e.g. 999,999 must read $1M, not $1000.0K).
+  const fmt = (val, suffix) => '$' + (val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)) + suffix;
+  if (amt >= 1000000) return fmt(amt / 1000000, 'M');
+  if (amt >= 1000) {
+    const k = Math.round((amt / 1000) * 10) / 10;
+    return k >= 1000 ? fmt(k / 1000, 'M') : fmt(k, 'K');
+  }
+  return '$' + amt.toLocaleString();
+}
+
 // ─── Card Sizes ──────────────────────────────────────────────
 // We use fixed pixel values for precision. The component accepts a `size` prop.
 //   'xl'  → your hole cards     (64×90)
@@ -172,8 +189,51 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const emojiTrayRef = useRef(null);
   const emojiIdCounter = useRef(0);
 
-  // Reset bet slider on new hand
-  useEffect(() => { setBetSliderValue(0); }, [handCount]);
+  // Chip flight animation state
+  const [chipFlights, setChipFlights] = useState([]);
+  const prevBetsRef = useRef({});
+  const chipFlightId = useRef(0);
+  const chipFlightTimers = useRef([]);
+  // Live ref to the latest players array so socket handlers (which are
+  // registered once) can read current roundBet values when a hand completes.
+  const playersRef = useRef(players);
+
+  useEffect(() => { playersRef.current = players; }, [players]);
+  // Last hand number this client has observed. Null on mount, which matters:
+  // a fresh join into an already-running game sees handCount jump 0 → N on
+  // its first sync, but that is NOT a new hand — so we must not treat it as
+  // one (doing so would wipe the mid-game baseline guard and burst flights).
+  const lastHandCountRef = useRef(null);
+  // True when this client mounted into an already-running game (not via
+  // rejoin — that path sets a baseline in onFullStateSnapshot). Used to
+  // record existing bets as baseline instead of bursting flights on join.
+  const mountedMidGameRef = useRef(
+    typeof clubData.gameState === 'string' && clubData.gameState !== 'WAITING'
+  );
+
+  // Clear any pending flight timers on unmount
+  useEffect(() => {
+    return () => {
+      chipFlightTimers.current.forEach(t => clearTimeout(t));
+      chipFlightTimers.current = [];
+    };
+  }, []);
+
+  // Reset bet slider + chip flight tracking when a NEW hand genuinely starts
+  // (handCount advances forward). Mount-time jumps (0 → N on a fresh join or
+  // rejoin) are NOT new hands and must be ignored, or the mid-game baseline
+  // guard gets wiped before the bet-diff effect can scan existing bets.
+  useEffect(() => {
+    const isNewHand = lastHandCountRef.current !== null && handCount > lastHandCountRef.current;
+    lastHandCountRef.current = handCount;
+    if (!isNewHand) return;
+    setBetSliderValue(0);
+    prevBetsRef.current = {};
+    setChipFlights([]);
+    // New hand always starts fresh — drop any lingering mid-game baseline
+    // guard so blind posts on this hand can animate normally.
+    mountedMidGameRef.current = false;
+  }, [handCount]);
 
   // Close emoji tray on outside click
   useEffect(() => {
@@ -259,6 +319,18 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     };
 
     const onFullStateSnapshot = (data) => {
+      // Suppress chip flights on reconnect — just baseline current bets
+      if (data.players) {
+        const baseline = {};
+        for (const p of data.players) {
+          if (p && typeof p.roundBet === 'number') baseline[p.seatIndex] = p.roundBet;
+        }
+        prevBetsRef.current = baseline;
+        setChipFlights([]);
+        // Drain any pending flight timers so they don't fire as no-ops
+        chipFlightTimers.current.forEach(t => clearTimeout(t));
+        chipFlightTimers.current = [];
+      }
       setCommunityCards(data.communityCards || []);
       setPot(data.pot || 0);
       setCurrentBet(data.currentBet || 0);
@@ -294,11 +366,43 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       setLastAction(null);
 
       if (data.handResult) {
+        // Collect unique winner seat indices and each winner's total payout
+        // across all (side) pots so split pots pay out to every winner.
+        const winnerSeats = [];
+        const winnerTotals = {};
         for (const pot of data.handResult) {
           for (const winner of pot.winners) {
+            if (winner.seatIndex >= 0) {
+              if (!winnerSeats.includes(winner.seatIndex)) winnerSeats.push(winner.seatIndex);
+              winnerTotals[winner.seatIndex] = (winnerTotals[winner.seatIndex] || 0) + (winner.amountWon || 0);
+            }
             const winnerName = data.players?.find(p => p.seatIndex === winner.seatIndex)?.userName || 'Player';
             addNotification(`🏆 ${winnerName} wins $${winner.amountWon}!`, 'success');
           }
+        }
+
+        // Stage 1: sweep any chips still on the felt (e.g. blinds left when
+        // everyone folds) into the middle pot.
+        const current = playersRef.current;
+        let swept = 0;
+        current.forEach((p, seatIndex) => {
+          if (p && (p.roundBet || 0) > 0) {
+            spawnChipFlight(seatIndex, BET_CHIP_POSITIONS[seatIndex], POT_POSITION, formatBetLabel(p.roundBet));
+            swept++;
+          }
+        });
+
+        // Stage 2: push the pot out to the winner(s). Delayed until the
+        // sweep lands in the middle so it reads: bets collect → pot pays.
+        if (winnerSeats.length > 0) {
+          const delay = swept > 0 ? 700 : 250;
+          const stage2Timer = setTimeout(() => {
+            chipFlightTimers.current = chipFlightTimers.current.filter(t => t !== stage2Timer);
+            winnerSeats.forEach(seat => {
+              spawnChipFlight(seat, POT_POSITION, SEAT_POSITIONS[seat], formatBetLabel(winnerTotals[seat]));
+            });
+          }, delay);
+          chipFlightTimers.current.push(stage2Timer);
         }
       }
 
@@ -309,6 +413,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
             updated[p.seatIndex] = {
               ...updated[p.seatIndex],
               stack: p.stack,
+              roundBet: 0, // chips were flown to the winner
               showHoleCards: true,
               holeCards: p.holeCards,
             };
@@ -364,6 +469,69 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clubId, userId]);
+
+  // ─── Spawn a chip that flies between two felt positions ───
+  // On a new bet: seat → bet spot. When a betting round ends:
+  // bet spot → pot center (sweep). On hand completion: bet spot → winner.
+  const spawnChipFlight = useCallback((seatIndex, fromPos, toPos, label) => {
+    const from = fromPos || SEAT_POSITIONS[seatIndex];
+    const to = toPos || POT_POSITION;
+    if (!from || !to) return;
+    const id = ++chipFlightId.current;
+    const flight = {
+      key: `flight-${id}`,
+      label: label || '',
+      fromTop: from.top,
+      fromLeft: from.left,
+      midTop: (from.top + to.top) / 2 - 12,
+      midLeft: (from.left + to.left) / 2,
+      toTop: to.top,
+      toLeft: to.left,
+    };
+    setChipFlights(prev => [...prev, flight]);
+    const timer = setTimeout(() => {
+      chipFlightTimers.current = chipFlightTimers.current.filter(t => t !== timer);
+      setChipFlights(prev => prev.filter(f => f.key !== flight.key));
+    }, 800);
+    chipFlightTimers.current.push(timer);
+  }, []);
+
+  // ─── Track betting-round chip movement ───
+  // When a player's roundBet increases (call/bet/raise), a chip flies from
+  // their seat to their bet spot. When the betting round ends (roundBet
+  // resets to 0 on street advance), the bet chips sweep into the pot.
+  useEffect(() => {
+    if (gameState === 'WAITING' || gameState === 'SHOWDOWN' || gameState === 'HAND_COMPLETE') return;
+
+    // Fresh join into an already-running game: record existing bets as a
+    // baseline on the first sync that actually carries bet amounts, so we
+    // don't burst a flight for every seated player at once.
+    if (mountedMidGameRef.current) {
+      let recorded = 0;
+      for (const p of players) {
+        if (p && typeof p.roundBet === 'number') {
+          prevBetsRef.current[p.seatIndex] = p.roundBet;
+          recorded++;
+        }
+      }
+      if (recorded > 0) mountedMidGameRef.current = false;
+      return;
+    }
+
+    players.forEach((p, seatIndex) => {
+      if (!p || typeof p.roundBet !== 'number') return;
+      const prev = prevBetsRef.current[seatIndex] || 0;
+      const cur = p.roundBet;
+      if (cur > prev) {
+        // New bet placed — chip flies from the seat to the bet spot
+        spawnChipFlight(seatIndex, SEAT_POSITIONS[seatIndex], BET_CHIP_POSITIONS[seatIndex], formatBetLabel(cur));
+      } else if (cur < prev && prev > 0) {
+        // Betting round ended — the bet chips sweep into the pot
+        spawnChipFlight(seatIndex, BET_CHIP_POSITIONS[seatIndex], POT_POSITION, formatBetLabel(prev));
+      }
+      prevBetsRef.current[seatIndex] = cur;
+    });
+  }, [players, gameState, spawnChipFlight]);
 
   const addNotification = useCallback((message, type = 'info') => {
     const id = Date.now();
@@ -470,7 +638,8 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
   // ─── Bet sizing ───────────────────────────────────────────
   const potSize = pot || 0;
-  const currentPlayerBet = myPlayerData?.betAmount || 0;
+  // Use the CURRENT STREET bet (roundBet), not the cumulative hand total
+  const currentPlayerBet = myPlayerData?.roundBet || 0;
   const myStack = myPlayerData?.stack || 0;
   const minBetValue = currentBet > 0
     ? Math.min(currentBet + minRaise, myStack + currentPlayerBet)
@@ -664,7 +833,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
               {/* ── Pot ── */}
               {pot > 0 && (
-                <div className="bg-black/50 rounded-full px-4 sm:px-6 py-1.5 sm:py-2 backdrop-blur-sm z-10 animate-chip-stack">
+                <div key={pot} className="bg-black/50 rounded-full px-4 sm:px-6 py-1.5 sm:py-2 backdrop-blur-sm z-10 animate-pot-grow">
                   <span className="text-sm sm:text-base font-bold text-poker-gold flex items-center gap-2">
                     <span className="text-yellow-400/60 text-xs">💰</span>
                     Pot: ${pot.toLocaleString()}
@@ -714,19 +883,9 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               // Readable, adaptive bet chip: abbreviate large amounts (e.g. $1.2K,
               // $2.5M) and only scale the font down slightly, so big bets stay
               // crisp and legible instead of being clipped inside a fixed circle.
-              const betLabel = (() => {
-                if (!player.betAmount) return '';
-                const amt = player.betAmount;
-                // Round to 1 decimal first, then promote K→M if rounding pushed
-                // the value up to 1000 (e.g. 999,999 must read $1M, not $1000.0K).
-                const fmt = (val, suffix) => '$' + (val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)) + suffix;
-                if (amt >= 1000000) return fmt(amt / 1000000, 'M');
-                if (amt >= 1000) {
-                  const k = Math.round((amt / 1000) * 10) / 10;
-                  return k >= 1000 ? fmt(k / 1000, 'M') : fmt(k, 'K');
-                }
-                return '$' + amt.toLocaleString();
-              })();
+              // Show the CURRENT STREET bet (roundBet) so chips in front of
+              // players reset every betting round and get swept to the pot.
+              const betLabel = formatBetLabel(player.roundBet);
               const betFont =
                 betLabel.length >= 8 ? 'text-[8px] sm:text-[10px]' :
                 betLabel.length >= 5 ? 'text-[9px] sm:text-[11px]' :
@@ -735,7 +894,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               return (
                 <React.Fragment key={player.userId || `seat-${index}`}>
                   {/* Bet chip — on the felt in front of the seat */}
-                  {player.betAmount > 0 && (
+                  {player.roundBet > 0 && (
                     <div className="absolute -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none transition-all duration-500"
                       style={{ top: `${chipPos.top}%`, left: `${chipPos.left}%` }}
                     >
@@ -842,7 +1001,36 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                 </div>
               </React.Fragment>
             );
-            })}
+            })}              {/* ── Flying bet chips (seat → pot / winner) ── */}
+            {chipFlights.map(f => (
+              <div key={f.key}
+                className="absolute z-30 pointer-events-none animate-chip-fly"
+                style={{
+                  // Inline start position so the chip degrades gracefully
+                  // (no stray top-left flash) if animations are disabled.
+                  top: `${f.fromTop}%`,
+                  left: `${f.fromLeft}%`,
+                  transform: 'translate(-50%, -50%)',
+                  '--fly-from-top': `${f.fromTop}%`,
+                  '--fly-from-left': `${f.fromLeft}%`,
+                  '--fly-mid-top': `${f.midTop}%`,
+                  '--fly-mid-left': `${f.midLeft}%`,
+                  '--fly-to-top': `${f.toTop}%`,
+                  '--fly-to-left': `${f.toLeft}%`,
+                }}
+              >
+                <div className={`poker-chip text-white font-bold tabular-nums rounded-full
+                                flex items-center justify-center whitespace-nowrap
+                                border border-white/40 border-solid shadow-lg
+                                ${f.label
+                                  ? 'h-5 sm:h-6 min-w-5 sm:min-w-6 px-1 text-[8px] sm:text-[9px]'
+                                  : 'w-5 h-5 sm:w-6 sm:h-6 text-[9px] sm:text-[10px]'}`}
+                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.45)' }}
+                >
+                  {f.label || '$'}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -978,7 +1166,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                       Fold
                     </button>
 
-                    {currentBet <= (myPlayerData?.betAmount || 0) ? (
+                    {currentBet <= (myPlayerData?.roundBet || 0) ? (
                       <button onClick={() => handleAction('check')} disabled={!canAct}
                         className="action-btn-check px-4 py-2 text-xs">
                         Check
@@ -986,7 +1174,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     ) : (
                       <button onClick={() => handleAction('call')} disabled={!canAct}
                         className="action-btn-call px-4 py-2 text-xs">
-                        Call ${(currentBet - (myPlayerData?.betAmount || 0)).toLocaleString()}
+                        Call ${(currentBet - (myPlayerData?.roundBet || 0)).toLocaleString()}
                       </button>
                     )}
                   </div>

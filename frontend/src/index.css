@@ -299,6 +299,51 @@
   animation: chipStack 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* Pot pops when it grows (re-triggered via key={pot}) */
+@keyframes potGrow {
+  0% {
+    transform: scale(0.85);
+  }
+  55% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-pot-grow {
+  animation: potGrow 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Chip flying from a player's seat to the pot */
+@keyframes chipFly {
+  0% {
+    top: var(--fly-from-top);
+    left: var(--fly-from-left);
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  15% {
+    opacity: 1;
+  }
+  45% {
+    top: var(--fly-mid-top);
+    left: var(--fly-mid-left);
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+  100% {
+    top: var(--fly-to-top);
+    left: var(--fly-to-left);
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.85);
+  }
+}
+
+.animate-chip-fly {
+  animation: chipFly 0.6s ease-in forwards;
+}
+
 /* Bounce subtle (for dealer button) */
 @keyframes bounceSubtle {
   0%, 100% {
