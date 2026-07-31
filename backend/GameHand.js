@@ -44,6 +44,8 @@ function createHand(clubState, handCount) {
         stack: seat.stack,
         betAmount: 0,         // total bet in this hand
         roundBet: 0,          // bet in current betting round
+        postedBlind: 0,       // SB/BB amount posted (for blinds-paid tracking)
+        sawFlop: false,       // set true when this player is dealt the flop
         isFolded: false,
         isAllIn: false,
         hasActed: false,      // acted in current betting round
@@ -132,11 +134,13 @@ function startHand(hand) {
   sbPlayer.stack -= sbAmount;
   sbPlayer.betAmount = sbAmount;
   sbPlayer.roundBet = sbAmount;
+  sbPlayer.postedBlind = sbAmount;
   sbPlayer.hasActed = true;
 
   bbPlayer.stack -= bbAmount;
   bbPlayer.betAmount = bbAmount;
   bbPlayer.roundBet = bbAmount;
+  bbPlayer.postedBlind = bbAmount;
   bbPlayer.hasActed = true; // BB has acted by posting the big blind
 
   hand.pot = sbAmount + bbAmount;
@@ -215,6 +219,10 @@ function advanceStreet(hand) {
       hand._deck.pop(); // burn
       hand.communityCards.push(hand._deck.pop(), hand._deck.pop(), hand._deck.pop());
       hand.gameStatus = GAME_STATES.FLOP;
+      // Mark every player still in the hand as having seen the flop
+      for (const p of hand.players) {
+        if (!p.isFolded) p.sawFlop = true;
+      }
       break;
 
     case GAME_STATES.FLOP:
@@ -555,10 +563,17 @@ function handleAction(hand, seatIndex, action, amount) {
 
   // Check if round is complete
   if (isRoundComplete(hand)) {
-    if (hand.gameStatus === GAME_STATES.RIVER || hand.players.filter(p => !p.isFolded).length <= 1) {
-      goToShowdown(hand);
-    } else {
-      advanceStreet(hand);
+    // Keep advancing streets while the round is still complete. This handles
+    // all-in runouts: when everyone remaining is all-in there is nobody left
+    // to act, so we deal the remaining streets straight through to showdown.
+    // Without this loop the hand would stall mid-hand (e.g. stuck on the flop)
+    // with currentPlayerIndex = -1 and no one to trigger the next street.
+    while (isRoundComplete(hand) && hand.gameStatus !== GAME_STATES.SHOWDOWN && !isHandComplete(hand)) {
+      if (hand.gameStatus === GAME_STATES.RIVER || hand.players.filter(p => !p.isFolded).length <= 1) {
+        goToShowdown(hand);
+      } else {
+        advanceStreet(hand);
+      }
     }
   } else {
     // Move to next player

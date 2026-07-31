@@ -74,6 +74,30 @@ describe('Phase 4 - Action Edge Cases', () => {
         expect(result.error).toBeNull();
       }
     });
+
+    test('all-in runout deals remaining streets to showdown (does not stall at flop)', () => {
+      const club = createClubState();
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      // Every player shoves all-in
+      let guard = 0;
+      while (hand.gameStatus !== GAME_STATES.HAND_COMPLETE && guard < 10) {
+        guard++;
+        const pIdx = hand.currentPlayerIndex;
+        if (pIdx < 0) break; // no one left to act — the bug stalls here
+        const p = hand.players[pIdx];
+        const allInTotal = p.roundBet + p.stack;
+        const r = handleAction(hand, p.seatIndex, 'raise', allInTotal);
+        if (r.error) handleAction(hand, p.seatIndex, 'call');
+      }
+
+      // The hand must run out all five community cards and reach showdown
+      expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
+      expect(hand.communityCards.length).toBe(5);
+      expect(hand.handResult).toBeDefined();
+      expect(hand.pot).toBeGreaterThan(0);
+    });
   });
 
   describe('Minimum raise validation', () => {

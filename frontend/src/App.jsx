@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import Lobby from './Lobby';
 import ClubRoom from './ClubRoom';
-import QuestPanel from './QuestPanel';
+import ProgressPanel from './ProgressPanel';
 import { connect, disconnect, getSocket } from './socket';
 import { saveAuth, loadAuth, clearAuth, getToken, getUser } from './auth';
 
@@ -254,7 +254,7 @@ export default function App() {
           onLeave={handleLeaveClub}
           onLogout={handleLogout}
         />
-        <QuestPanel />
+        <ProgressPanel />
       </>
     );
   }
@@ -269,7 +269,7 @@ export default function App() {
           userId={getUser()?.id}
           onLogout={handleLogout}
         />
-        <QuestPanel />
+        <ProgressPanel />
       </>
     );
   }

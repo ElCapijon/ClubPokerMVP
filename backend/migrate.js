@@ -6,6 +6,7 @@ async function migrate() {
     await client.query('BEGIN');
 
     // Drop old tables (clean migration)
+    await client.query(`DROP TABLE IF EXISTS player_hand_stats CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS user_challenge_progress CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS challenge_definitions CASCADE;`);
     await client.query(`DROP TABLE IF EXISTS challenges CASCADE;`);
@@ -83,6 +84,30 @@ async function migrate() {
         description VARCHAR(100) NOT NULL,
         target_value INTEGER NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // ─── Player Hand Stats (lifetime hand tracker) ──────────
+    await client.query(`
+      CREATE TABLE player_hand_stats (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        hands_played INT DEFAULT 0,
+        hands_won INT DEFAULT 0,
+        blinds_paid BIGINT DEFAULT 0,
+        total_wagered BIGINT DEFAULT 0,
+        net_profit BIGINT DEFAULT 0,
+        folds INT DEFAULT 0,
+        calls INT DEFAULT 0,
+        raises INT DEFAULT 0,
+        checks INT DEFAULT 0,
+        all_ins INT DEFAULT 0,
+        flops_seen INT DEFAULT 0,
+        showdowns_reached INT DEFAULT 0,
+        showdowns_won INT DEFAULT 0,
+        biggest_pot_won BIGINT DEFAULT 0,
+        best_hand_rank INT DEFAULT 0,
+        best_hand_name VARCHAR(30) DEFAULT 'High Card',
+        updated_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
@@ -222,10 +247,10 @@ async function migrate() {
 
     await client.query('COMMIT');
     console.log('Migration completed successfully!');
-    console.log('Tables created: users, ring_games, player_sessions, hand_histories, challenge_definitions, user_challenge_progress');
+    console.log('Tables created: users, ring_games, player_sessions, hand_histories, challenge_definitions, user_challenge_progress, player_hand_stats');
     console.log('Seed data: 77 milestone challenge definitions inserted');
     return {
-      tables: ['users', 'ring_games', 'player_sessions', 'hand_histories', 'challenge_definitions', 'user_challenge_progress'],
+      tables: ['users', 'ring_games', 'player_sessions', 'hand_histories', 'challenge_definitions', 'user_challenge_progress', 'player_hand_stats'],
     };
   } catch (err) {
     await client.query('ROLLBACK');

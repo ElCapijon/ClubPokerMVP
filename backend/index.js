@@ -8,8 +8,10 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction } = require('./GameHand');
 const ChallengeTracker = require('./ChallengeTracker');
+const HandStats = require('./HandStats');
 const pool = require('./db');
 const { sendWelcomeEmail, sendPasswordResetEmail } = require('./email');
+const BotPlayer = require('./BotPlayer');
 // Map rank number to stat name for hand rank tracking
 const RANK_STATS = {
   2: 'pairMade',
@@ -119,6 +121,19 @@ app.get('/api/challenges', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('[Challenges API] Error:', err.message);
     res.status(500).json({ error: 'Failed to get challenges' });
+  }
+});
+
+// ============================================================
+// Hand Tracker API — Lifetime stats for a logged-in player
+// ============================================================
+app.get('/api/stats', authenticateToken, async (req, res) => {
+  try {
+    const stats = await HandStats.getUserStats(req.user.userId);
+    res.json({ stats });
+  } catch (err) {
+    console.error('[Stats API] Error:', err.message);
+    res.status(500).json({ error: 'Failed to get stats' });
   }
 });
 
@@ -696,6 +711,8 @@ function broadcastTableState(gameId) {
       isConnected: seat.isConnected,
       isHost: seat.userId === game.hostId,
       isSittingOut: seat.isSittingOut || false,
+      isBot: !!seat.isBot,
+      userId: seat.userId,
     };
   });
 
@@ -756,6 +773,65 @@ function setActionTimer(gameId) {
   const currentPlayer = hand.players[hand.currentPlayerIndex];
   if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) return;
 
+  const seatIdx = currentPlayer.seatIndex;
+  const seat = game.seats[seatIdx];
+
+  // ── BOT TURN: If the current player is a bot, process their action after a short delay ──
+  if (seat && seat.isBot) {
+    const botDelay = 800 + Math.random() * 1200; // 0.8-2s delay for natural feel
+    const timeout = setTimeout(() => {
+      const g = ringGames.get(gameId);
+      if (!g || !g.currentHand) return;
+
+      const h = g.currentHand;
+      if (h.gameStatus === GAME_STATES.SHOWDOWN || h.gameStatus === GAME_STATES.HAND_COMPLETE) return;
+
+      const pIdx = h.currentPlayerIndex;
+      if (pIdx < 0 || pIdx >= h.players.length) return;
+
+      const p = h.players[pIdx];
+      if (p.isFolded || p.isAllIn) return;
+
+      // Bot decides what to do
+      const decision = BotPlayer.decideAction(h, p.seatIndex, g);
+      console.log(`[Bot] ${p.userName} decides to ${decision.action}${decision.amount ? ' ' + decision.amount : ''}`);
+
+      const result = handleAction(h, p.seatIndex, decision.action, decision.amount);
+      if (result.error) {
+        console.error(`[Bot] Action error: ${result.error}`);
+        // Fallback: fold
+        const fallback = handleAction(h, p.seatIndex, 'fold');
+        if (fallback.error) return;
+      }
+
+      lastActions.set(gameId, {
+        seatIndex: p.seatIndex,
+        userName: p.userName,
+        action: decision.action,
+        amount: decision.amount || null,
+        timestamp: Date.now(),
+      });
+
+      g.gameState = h.gameStatus;
+      for (const hp of h.players) {
+        const s = g.seats[hp.seatIndex];
+        if (s) s.stack = hp.stack;
+      }
+
+      broadcastGameState(gameId);
+
+      if (isHandComplete(h)) {
+        handleHandComplete(gameId, h);
+      } else {
+        setActionTimer(gameId);
+      }
+    }, botDelay);
+
+    actionTimers.set(gameId, timeout);
+    return;
+  }
+
+  // ── HUMAN TURN: Standard auto-fold timer ──
   const timerMs = (hand.actionTimer || 20) * 1000;
 
   const timeout = setTimeout(() => {
@@ -777,6 +853,11 @@ function setActionTimer(gameId) {
     const result = handleAction(handNow, seatIdx, 'fold');
     if (result.error) return;
 
+    // Count the auto-fold in the hand tracker (only after a successful action)
+    if (player.userId && !player.userId.startsWith('bot_')) {
+      HandStats.trackStat(player.userId, 'folds', 1);
+    }
+
     lastActions.set(gameId, {
       seatIndex: seatIdx,
       userName: player.userName,
@@ -794,32 +875,7 @@ function setActionTimer(gameId) {
     broadcastGameState(gameId);
 
     if (isHandComplete(handNow)) {
-      trackHandComplete(handNow);
-      io.to(gameRoom(gameId)).emit('hand_complete', {
-        handResult: handNow.handResult,
-        communityCards: handNow.communityCards,
-        players: handNow.players.map(p => ({
-          seatIndex: p.seatIndex,
-          userName: p.userName,
-          holeCards: p.holeCards,
-          stack: p.stack,
-        })),
-      });
-
-      setTimeout(() => {
-        const g = ringGames.get(gameId);
-        if (!g) return;
-        const nextHandCount = (handCounters.get(gameId) || 0) + 1;
-        const nextHand = createHand(g, nextHandCount);
-        if (nextHand) {
-          startHand(nextHand);
-          g.currentHand = nextHand;
-          g.gameState = nextHand.gameStatus;
-          handCounters.set(gameId, nextHandCount);
-          broadcastGameState(gameId);
-          setActionTimer(gameId);
-        }
-      }, 12000);
+      handleHandComplete(gameId, handNow);
     } else {
       setActionTimer(gameId);
     }
@@ -858,9 +914,42 @@ function checkAutoStart(gameId) {
 function trackHandComplete(hand) {
   if (!hand) return;
 
+  // Per-seat winnings & best winning hand from the pot splits
+  const wonBySeat = {};   // seatIndex -> total chips won
+  const bestBySeat = {};  // seatIndex -> { rank, name }
+  const biggestBySeat = {}; // seatIndex -> biggest single pot won
+  if (Array.isArray(hand.handResult)) {
+    for (const pot of hand.handResult) {
+      for (const w of (pot.winners || [])) {
+        const seat = w.seatIndex;
+        const amt = w.amountWon || 0;
+        wonBySeat[seat] = (wonBySeat[seat] || 0) + amt;
+        biggestBySeat[seat] = Math.max(biggestBySeat[seat] || 0, amt);
+        if (w.handResult && w.handResult.rank > 0) {
+          const existing = bestBySeat[seat];
+          if (!existing || w.handResult.rank > existing.rank) {
+            bestBySeat[seat] = { rank: w.handResult.rank, name: w.handResult.rankName };
+          }
+        }
+      }
+    }
+  }
+
   hand.players.forEach(p => {
     if (p.userId && !p.userId.startsWith('bot_')) {
       ChallengeTracker.trackStat(p.userId, 'handsPlayed', 1);
+
+      HandStats.trackHand(p.userId, {
+        won: wonBySeat[p.seatIndex] || 0,
+        wagered: p.betAmount || 0,
+        blindsPaid: p.postedBlind || 0,
+        bestRank: bestBySeat[p.seatIndex]?.rank || 0,
+        bestName: bestBySeat[p.seatIndex]?.name || null,
+        biggestPot: biggestBySeat[p.seatIndex] || 0,
+        flopsSeen: !!p.sawFlop,
+        showdown: !p.isFolded && hand.winningRank > 0,
+        wonShowdown: (wonBySeat[p.seatIndex] || 0) > 0 && hand.winningRank > 0,
+      });
     }
   });
 
@@ -909,20 +998,133 @@ function cleanupSeat(game, seatIndex, seat, userId, gameId) {
   game.seats[seatIndex] = null;
   console.log(`[Cleanup] Seat ${seatIndex} cleared for ${seat.userName}`);
 
-  // If host left, reassign or deactivate
+  // If host left, reassign to another human or deactivate the table
   if (seat.userId === game.hostId) {
-    const nextPlayer = game.seats.find(s => s);
-    if (nextPlayer) {
-      game.hostId = nextPlayer.userId;
-      console.log(`[Host] New host for ${gameId}: ${nextPlayer.userName}`);
+    const nextHuman = game.seats.find(s => s && s.userId && !s.userId.startsWith('bot_'));
+    if (nextHuman) {
+      game.hostId = nextHuman.userId;
+      console.log(`[Host] New host for ${gameId}: ${nextHuman.userName}`);
     } else {
-      // No players left — deactivate
-      ringGames.delete(gameId);
-      pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId])
-        .catch(err => console.error('[DB] Error deactivating game:', err.message));
+      // No human players left — deactivate (bots can't run a table alone)
+      deactivateGame(gameId);
       console.log(`[Game] ${gameId} deactivated (no players)`);
     }
   }
+}
+
+// ============================================================
+// Bot Bust / Hand Completion Helpers
+// ============================================================
+
+/** Check if any human player is seated (bots don't count). */
+function hasHumanPlayer(game) {
+  return game.seats.some(s => s && s.userId && !s.userId.startsWith('bot_'));
+}
+
+/**
+ * Deactivate a ring game: clear its timer, remove from memory,
+ * and mark it inactive in the database.
+ */
+function deactivateGame(gameId) {
+  const g = ringGames.get(gameId);
+  if (!g) return;
+  clearActionTimer(gameId);
+  ringGames.delete(gameId);
+  pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId])
+    .catch(err => console.error('[DB] Error deactivating game:', err.message));
+  console.log(`[Game] ${gameId} deactivated`);
+}
+
+/**
+ * Remove busted bots (stack <= 0) from the table after a hand completes,
+ * so they actually leave the table when knocked out.
+ * Returns the number of bots removed.
+ */
+function removeBustedBots(gameId) {
+  const game = ringGames.get(gameId);
+  if (!game) return 0;
+
+  let removed = 0;
+  for (let i = 0; i < MAX_SEATS; i++) {
+    const seat = game.seats[i];
+    if (seat && seat.userId && seat.userId.startsWith('bot_') && seat.stack <= 0) {
+      // Defensive: if the busted bot was somehow the host, hand it to a human
+      if (seat.userId === game.hostId) {
+        const nextHuman = game.seats.find(s => s && s.userId && !s.userId.startsWith('bot_'));
+        if (nextHuman) {
+          game.hostId = nextHuman.userId;
+          console.log(`[Host] New host for ${gameId}: ${nextHuman.userName}`);
+        }
+      }
+      game.seats[i] = null;
+      removed++;
+      console.log(`[Bots] "${seat.userName}" busted and left the table (seat ${i}) in game ${gameId}`);
+    }
+  }
+
+  if (removed > 0) {
+    broadcastTableState(gameId);
+  }
+  return removed;
+}
+
+/**
+ * Handle a completed hand: track stats, notify clients, remove busted bots,
+ * then deal the next hand. If fewer than 2 playable players remain, the game
+ * returns to the WAITING lobby. If no human players remain, the table closes.
+ */
+function handleHandComplete(gameId, hand) {
+  trackHandComplete(hand);
+
+  io.to(gameRoom(gameId)).emit('hand_complete', {
+    handResult: hand.handResult,
+    communityCards: hand.communityCards,
+    players: hand.players.map(p => ({
+      seatIndex: p.seatIndex,
+      userName: p.userName,
+      holeCards: p.holeCards,
+      stack: p.stack,
+    })),
+  });
+
+  setTimeout(() => {
+    const g = ringGames.get(gameId);
+    if (!g) return;
+
+    // Busted bots leave the table (free their seats) — done here so the
+    // hand-complete showdown reveal stays visible for the full 12 seconds.
+    removeBustedBots(gameId);
+
+    // If no human players remain, close the table entirely
+    if (!hasHumanPlayer(g)) {
+      deactivateGame(gameId);
+      return;
+    }
+
+    // If fewer than 2 players can actually play, return to WAITING lobby
+    const playableCount = g.seats.filter(s =>
+      s && s.isConnected && !s.isSittingOut && s.stack > 0
+    ).length;
+    if (playableCount < 2) {
+      clearActionTimer(gameId);
+      g.currentHand = null;
+      g.gameState = 'WAITING';
+      broadcastTableState(gameId);
+      console.log(`[Game] ${gameId} returned to WAITING (not enough players)`);
+      return;
+    }
+
+    const nextHandCount = (handCounters.get(gameId) || 0) + 1;
+    const nextHand = createHand(g, nextHandCount);
+    if (nextHand) {
+      startHand(nextHand);
+      g.currentHand = nextHand;
+      g.gameState = nextHand.gameStatus;
+      handCounters.set(gameId, nextHandCount);
+      broadcastGameState(gameId);
+      setActionTimer(gameId);
+    }
+  }, 12000);
 }
 
 function recordAction(gameId, seatIndex, action, amount) {
@@ -1069,6 +1271,7 @@ io.on('connection', (socket) => {
           isConnected: seat.isConnected,
           isHost: seat.userId === game.hostId,
           isSittingOut: seat.isSittingOut || false,
+          userId: seat.userId,
         };
       });
 
@@ -1147,12 +1350,12 @@ io.on('connection', (socket) => {
 
       // If host left, assign new host or mark inactive
       if (seat.userId === game.hostId) {
-        const nextPlayer = game.seats.find(s => s);
-        if (nextPlayer) {
-          game.hostId = nextPlayer.userId;
-          console.log(`[Host] New host for ${gameId}: ${nextPlayer.userName}`);
+        const nextHuman = game.seats.find(s => s && s.userId && !s.userId.startsWith('bot_'));
+        if (nextHuman) {
+          game.hostId = nextHuman.userId;
+          console.log(`[Host] New host for ${gameId}: ${nextHuman.userName}`);
         } else {
-          // No human players left — deactivate
+          // No human players left — deactivate (bots can't run a table alone)
           try {
             await pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId]);
           } catch (dbErr) {
@@ -1256,6 +1459,11 @@ io.on('connection', (socket) => {
         if (player && player.isAllIn) {
           ChallengeTracker.trackStat(actingUserId, 'allInsMade', 1);
         }
+        // Hand tracker action counts
+        const handStatsMap = { fold: 'folds', call: 'calls', raise: 'raises', bet: 'raises', check: 'checks' };
+        const hStat = handStatsMap[action];
+        if (hStat) HandStats.trackStat(actingUserId, hStat, 1);
+        if (player && player.isAllIn) HandStats.trackStat(actingUserId, 'all_ins', 1);
       }
 
       if (game.currentHand && (game.currentHand.gameStatus === 'FLOP' || game.currentHand.gameStatus === 'TURN' || game.currentHand.gameStatus === 'RIVER')) {
@@ -1290,19 +1498,7 @@ io.on('connection', (socket) => {
 
       if (isHandComplete(game.currentHand)) {
         const hand = game.currentHand;
-        trackHandComplete(hand);
         lastActions.delete(gameId);
-
-        io.to(gameRoom(gameId)).emit('hand_complete', {
-          handResult: hand.handResult,
-          communityCards: hand.communityCards,
-          players: hand.players.map(p => ({
-            seatIndex: p.seatIndex,
-            userName: p.userName,
-            holeCards: p.holeCards,
-            stack: p.stack,
-          })),
-        });
 
         try {
           pool.query(
@@ -1327,18 +1523,7 @@ io.on('connection', (socket) => {
           console.error('[DB] Hand history error:', dbErr.message);
         }
 
-        setTimeout(() => {
-          const nextHandCount = (handCounters.get(gameId) || 0) + 1;
-          const nextHand = createHand(game, nextHandCount);
-          if (nextHand) {
-            startHand(nextHand);
-            game.currentHand = nextHand;
-            game.gameState = nextHand.gameStatus;
-            handCounters.set(gameId, nextHandCount);
-            broadcastGameState(gameId);
-            setActionTimer(gameId);
-          }
-        }, 12000);
+        handleHandComplete(gameId, hand);
       } else {
         setActionTimer(gameId);
       }
@@ -1366,6 +1551,104 @@ io.on('connection', (socket) => {
 
     broadcastTableState(gameId);
     checkAutoStart(gameId);
+  });
+
+  // ---------- ADD BOTS (host only) ----------
+  socket.on('add_bots', ({ gameId }, callback) => {
+    try {
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
+      }
+
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
+      }
+
+      if (playerInfo.userId !== game.hostId) {
+        return callback && callback({ error: 'Only the host can add bots' });
+      }
+
+      if (game.gameState !== 'WAITING') {
+        return callback && callback({ error: 'Can only add bots while waiting' });
+      }
+
+      // Collect existing bot names to avoid duplicates
+      // Also include human names to avoid name collisions
+      const usedNames = game.seats
+        .filter(s => s && s.userName)
+        .map(s => s.userName);
+
+      let botsAdded = 0;
+      for (let i = 0; i < MAX_SEATS; i++) {
+        if (game.seats[i] === null) {
+          const botName = BotPlayer.getBotName(usedNames);
+          const botId = BotPlayer.generateBotId();
+          usedNames.push(botName);
+
+          game.seats[i] = {
+            userId: botId,
+            userName: botName,
+            stack: game.minBuyin || 100,
+            isReady: true,
+            isConnected: true,
+            isSittingOut: false,
+            isBot: true,
+          };
+          botsAdded++;
+          console.log(`[Bots] Added bot "${botName}" to seat ${i} in game ${gameId}`);
+        }
+      }
+
+      broadcastTableState(gameId);
+      checkAutoStart(gameId);
+
+      callback && callback(null, { botsAdded });
+    } catch (err) {
+      console.error('[Add Bots Error]', err);
+      callback && callback({ error: 'Failed to add bots' });
+    }
+  });
+
+  // ---------- REMOVE BOTS (host only) ----------
+  socket.on('remove_bots', ({ gameId }, callback) => {
+    try {
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
+      }
+
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
+      }
+
+      if (playerInfo.userId !== game.hostId) {
+        return callback && callback({ error: 'Only the host can remove bots' });
+      }
+
+      if (game.gameState !== 'WAITING' && game.gameState !== 'HAND_COMPLETE') {
+        return callback && callback({ error: 'Can only remove bots while waiting or between hands' });
+      }
+
+      let botsRemoved = 0;
+      for (let i = 0; i < MAX_SEATS; i++) {
+        const seat = game.seats[i];
+        if (seat && seat.userId && seat.userId.startsWith('bot_')) {
+          game.seats[i] = null;
+          botsRemoved++;
+          console.log(`[Bots] Removed bot from seat ${i} in game ${gameId}`);
+        }
+      }
+
+      broadcastTableState(gameId);
+
+      callback && callback(null, { botsRemoved });
+    } catch (err) {
+      console.error('[Remove Bots Error]', err);
+      callback && callback({ error: 'Failed to remove bots' });
+    }
   });
 
   // ---------- REJOIN RING GAME ----------
@@ -1670,21 +1953,25 @@ io.on('connection', (socket) => {
 });
 
 // ============================================================
-// Initialize Challenge Tracker
+// Initialize Trackers
 // ============================================================
 ChallengeTracker.init(io, userIdToSocket).catch(err => {
   console.error('[Challenges] Failed to initialize tracker:', err.message);
 });
 
+HandStats.init();
+
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('[Server] Shutting down...');
   ChallengeTracker.shutdown();
+  HandStats.shutdown();
   process.exit(0);
 });
 process.on('SIGINT', () => {
   console.log('[Server] Shutting down...');
   ChallengeTracker.shutdown();
+  HandStats.shutdown();
   process.exit(0);
 });
 

@@ -24,6 +24,16 @@ const SEAT_POSITIONS = [
   { top: 68, left: 90 },  // Seat 5: Lower-right, hugging the rail
 ];
 
+// Bet chips are rendered on the felt directly in front of each seat, pushed
+// toward the table center (50,50) so they read like a real bet on the table.
+// Center seats (0 & 3) are pushed further so the chip clears the tall seat
+// column (dealer button + avatar + name); side seats only need a small nudge.
+const BET_CHIP_FRACTIONS = [0.30, 0.20, 0.20, 0.30, 0.20, 0.20];
+const BET_CHIP_POSITIONS = SEAT_POSITIONS.map((pos, i) => ({
+  top: pos.top + (50 - pos.top) * BET_CHIP_FRACTIONS[i],
+  left: pos.left + (50 - pos.left) * BET_CHIP_FRACTIONS[i],
+}));
+
 // ─── Card Sizes ──────────────────────────────────────────────
 // We use fixed pixel values for precision. The component accepts a `size` prop.
 //   'xl'  → your hole cards     (64×90)
@@ -700,12 +710,53 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
               const isActiveTurn = index === currentPlayerSeatIndex;
               const isDealer = index === dealerSeatIndex;
+              const chipPos = BET_CHIP_POSITIONS[index];
+              // Readable, adaptive bet chip: abbreviate large amounts (e.g. $1.2K,
+              // $2.5M) and only scale the font down slightly, so big bets stay
+              // crisp and legible instead of being clipped inside a fixed circle.
+              const betLabel = (() => {
+                if (!player.betAmount) return '';
+                const amt = player.betAmount;
+                // Round to 1 decimal first, then promote K→M if rounding pushed
+                // the value up to 1000 (e.g. 999,999 must read $1M, not $1000.0K).
+                const fmt = (val, suffix) => '$' + (val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)) + suffix;
+                if (amt >= 1000000) return fmt(amt / 1000000, 'M');
+                if (amt >= 1000) {
+                  const k = Math.round((amt / 1000) * 10) / 10;
+                  return k >= 1000 ? fmt(k / 1000, 'M') : fmt(k, 'K');
+                }
+                return '$' + amt.toLocaleString();
+              })();
+              const betFont =
+                betLabel.length >= 8 ? 'text-[8px] sm:text-[10px]' :
+                betLabel.length >= 5 ? 'text-[9px] sm:text-[11px]' :
+                'text-[10px] sm:text-xs';
 
               return (
-                <div key={player.userId}
-                  className="absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-500"
-                  style={{ top: `${pos.top}%`, left: `${pos.left}%` }}
-                >
+                <React.Fragment key={player.userId || `seat-${index}`}>
+                  {/* Bet chip — on the felt in front of the seat */}
+                  {player.betAmount > 0 && (
+                    <div className="absolute -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none transition-all duration-500"
+                      style={{ top: `${chipPos.top}%`, left: `${chipPos.left}%` }}
+                    >
+                      <div className="relative flex items-center justify-center animate-chip-stack">
+                        {/* Stack depth below the top chip */}
+                        <div className="absolute inset-0 poker-chip opacity-50 translate-y-[2px]" />
+                        <div className="absolute inset-0 poker-chip opacity-75 translate-y-[1px]" />
+                        <div className={`relative poker-chip text-white ${betFont} font-bold tabular-nums
+                                        rounded-full h-7 sm:h-8 min-w-7 sm:min-w-8 px-2 sm:px-2.5
+                                        flex items-center justify-center whitespace-nowrap
+                                        border border-white/30 border-solid shadow-lg`}
+                          style={{ textShadow: '0 1px 2px rgba(0,0,0,0.45)' }}
+                        >
+                          {betLabel}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-500"
+                    style={{ top: `${pos.top}%`, left: `${pos.left}%` }}
+                  >
                   {/* Floating emojis */}
                   {floatingEmojis.filter(e => e.seatIndex === index).map(e => (
                     <EmojiBubble key={e.id} emoji={e.emoji} userName={e.userName} />
@@ -741,15 +792,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                         }
                       `}>
                         {player.userName?.charAt(0).toUpperCase() || '?'}
-
-                        {/* Bet amount badge */}
-                        {player.betAmount > 0 && (
-                          <div className="absolute -bottom-0.5 -right-0.5 bg-poker-chip text-white text-[8px] font-bold
-                                          rounded-full w-[18px] h-[18px] sm:w-5 sm:h-5 flex items-center justify-center
-                                          border border-white/20 shadow-lg animate-chip-stack">
-                            ${player.betAmount}
-                          </div>
-                        )}
 
                         {/* Connected dot */}
                         {player.isConnected && (
@@ -798,7 +840,8 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     </div>
                   </div>
                 </div>
-              );
+              </React.Fragment>
+            );
             })}
           </div>
         </div>
@@ -895,6 +938,32 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                       className="btn-primary px-4 py-2 text-xs">
                       Start Game
                     </button>
+                  )}
+
+                  {/* ── Host: Add / Remove Bots ── */}
+                  {isHost && (
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => {
+                        getSocket().emit('add_bots', { gameId: clubId }, (err, data) => {
+                          if (err) addNotification(err.error || 'Failed to add bots', 'error');
+                          else addNotification(`🤖 Added ${data.botsAdded} bot(s)!`, 'success');
+                        });
+                      }}
+                        className="px-3 py-1.5 bg-gradient-to-r from-purple-700 to-purple-600 text-white rounded-xl text-[10px] font-semibold
+                                   hover:from-purple-600 hover:to-purple-500 transition-all active:scale-95">
+                        + Bots
+                      </button>
+                      <button onClick={() => {
+                        getSocket().emit('remove_bots', { gameId: clubId }, (err, data) => {
+                          if (err) addNotification(err.error || 'Failed to remove bots', 'error');
+                          else addNotification(`🧹 Removed ${data.botsRemoved} bot(s)`, 'success');
+                        });
+                      }}
+                        className="px-3 py-1.5 bg-gray-700 text-gray-300 rounded-xl text-[10px] font-semibold
+                                   hover:bg-gray-600 transition-all active:scale-95">
+                        - Bots
+                      </button>
+                    </div>
                   )}
                 </>
               )}
