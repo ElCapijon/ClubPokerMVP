@@ -141,7 +141,13 @@ function startHand(hand) {
   bbPlayer.betAmount = bbAmount;
   bbPlayer.roundBet = bbAmount;
   bbPlayer.postedBlind = bbAmount;
-  bbPlayer.hasActed = true; // BB has acted by posting the big blind
+  // NOTE: Do NOT mark the BB as hasActed when posting the blind. Posting the
+  // big blind puts chips in the pot, but the BB still has the pre-flop
+  // "option": when action returns to them and everyone else has merely called,
+  // the BB must get a turn to check or raise. If we marked them as acted here,
+  // isRoundComplete() would end the round as soon as the last other player
+  // calls, skipping the BB's turn entirely. The SB is safe to mark acted
+  // because their roundBet (< currentBet) still forces them to act.
 
   hand.pot = sbAmount + bbAmount;
   hand.currentBet = bbAmount;

@@ -434,6 +434,12 @@ describe('GameHand', () => {
       
       // Reset the current bet to 0 (as if everyone has matched)
       hand.currentBet = 0;
+      // Everyone else has already acted this round
+      for (const p of hand.players) {
+        if (p.seatIndex !== hand.players[hand.currentPlayerIndex].seatIndex) {
+          p.hasActed = true;
+        }
+      }
       const currentIdx = hand.currentPlayerIndex;
       const seatIndex = hand.players[currentIdx].seatIndex;
       

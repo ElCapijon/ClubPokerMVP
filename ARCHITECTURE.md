@@ -217,7 +217,7 @@ WAITING → PREFLOP → FLOP → TURN → RIVER → SHOWDOWN → HAND_COMPLETE �
 - Small Blind = player left of dealer (min of SB amount and player's stack)
 - Big Blind = next player after SB (min of BB amount and player's stack)
 - SB posts and `hasActed` is set to true (pre-flop only)
-- BB posts and `hasActed` is set to true (pre-flop only)
+- BB posts the blind but is **not** marked `hasActed` — this preserves the BB's pre-flop "option": when action returns to them after everyone calls, they get a turn to check or raise instead of the round ending early
 - First to act pre-flop = player left of BB (UTG)
 - First to act post-flop = first active player left of dealer
 

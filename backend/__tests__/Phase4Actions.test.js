@@ -191,6 +191,70 @@ describe('Phase 4 - Action Edge Cases', () => {
     });
   });
 
+  describe('Big blind pre-flop option', () => {
+    test('BB gets a turn to act when everyone calls pre-flop', () => {
+      const club = createClubState();
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      // Turn order pre-flop: Alice (UTG/dealer) → Bob (SB) → Charlie (BB)
+      const bbSeat = hand.players[2].seatIndex; // Charlie is the BB
+
+      // Alice and Bob call
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+
+      // Action must now return to the BB (they have the option), not skip to flop
+      expect(hand.gameStatus).toBe(GAME_STATES.PREFLOP);
+      expect(hand.players[hand.currentPlayerIndex].seatIndex).toBe(bbSeat);
+
+      // BB can check (they already matched the blind)
+      const result = handleAction(hand, bbSeat, 'check');
+      expect(result.error).toBeNull();
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+    });
+
+    test('BB can raise pre-flop when action returns to them', () => {
+      const club = createClubState();
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      const bbSeat = hand.players[2].seatIndex;
+
+      // Alice and Bob call
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+
+      // BB raises to 60 (currentBet 20 + minRaise 20 = min total 40, so 60 is valid)
+      const result = handleAction(hand, bbSeat, 'raise', 60);
+      expect(result.error).toBeNull();
+      expect(hand.currentBet).toBe(60);
+      expect(hand.players[2].roundBet).toBe(60);
+    });
+
+    test('heads-up BB gets the option after SB calls', () => {
+      const club = createClubState();
+      club.seats[2] = null; // Remove Charlie → heads-up: Alice (BB/dealer) vs Bob (SB)
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      expect(hand.players.length).toBe(2);
+      // Dealer (player 0) is also the BB in heads-up; SB acts first
+      const bbSeat = hand.players[0].seatIndex;
+
+      // SB (Bob) calls — the only other player
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+
+      // BB must get the option to check/raise
+      expect(hand.gameStatus).toBe(GAME_STATES.PREFLOP);
+      expect(hand.players[hand.currentPlayerIndex].seatIndex).toBe(bbSeat);
+
+      const result = handleAction(hand, bbSeat, 'check');
+      expect(result.error).toBeNull();
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+    });
+  });
+
   describe('Call edge cases', () => {
     test('call deducts correct amount', () => {
       const club = createClubState();
