@@ -179,6 +179,15 @@ app.post('/api/games/leave', authenticateToken, async (req, res) => {
       const newBankroll = await addToBankroll(userId, refundAmount);
       console.log(`[Leave-HTTP] ${foundSeat.userName} refunded ${refundAmount} chips. New bankroll: ${newBankroll}`);
 
+      // Remove the player from socketToPlayer and have their socket leave the game room.
+      // This prevents stale mappings and stops the disconnect handler from racing.
+      const sockId = userIdToSocket.get(userId);
+      if (sockId) {
+        const sock = io.sockets.sockets.get(sockId);
+        if (sock) sock.leave(gameRoom(foundGame.id));
+        socketToPlayer.delete(sockId);
+      }
+
       // Only clear seat after successful refund
       cleanupSeat(foundGame, foundSeatIndex, foundSeat, userId, foundGame.id);
       broadcastTableState(foundGame.id);

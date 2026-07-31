@@ -156,7 +156,9 @@ export default function App() {
 
   const handleLeaveClub = useCallback(() => {
     clearSession();
-    disconnect();
+    // Don't disconnect — keep the socket alive so the Lobby can reuse it.
+    // Disconnecting would trigger a server-side disconnect handler that races
+    // with the HTTP refund and breaks the new socket's userId mapping.
     setGameData(null);
     setView('lobby');
   }, []);
