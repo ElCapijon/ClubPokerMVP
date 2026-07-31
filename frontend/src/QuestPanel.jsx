@@ -16,7 +16,6 @@ function CompletionToast({ challenge, onDismiss }) {
       <div className="bg-gradient-to-r from-yellow-900/95 via-amber-900/95 to-yellow-900/95 backdrop-blur-md
                       rounded-2xl border border-poker-gold/40 p-4 shadow-2xl shadow-poker-gold/10 text-center">
         <div className="flex flex-col items-center gap-1">
-          <span className="text-3xl animate-bounce">{challenge.badge || '⭐'}</span>
           <h3 className="text-base font-bold text-poker-gold">Challenge Complete!</h3>
           <p className="text-sm text-white/90">{challenge.name}</p>
           {challenge.description && (
@@ -36,7 +35,7 @@ function CompletionToast({ challenge, onDismiss }) {
 
 // ─── Quest Card ─────────────────────────────────────────────
 function QuestCard({ quest }) {
-  const { name, description, targetValue, progress, isCompleted, rewardBadge, stat } = quest;
+  const { name, description, targetValue, progress, isCompleted, stat } = quest;
   const pct = Math.min(100, Math.round((progress / targetValue) * 100));
   const progressLabel = isCompleted ? '✓' : `${progress}/${targetValue}`;
 
@@ -58,14 +57,11 @@ function QuestCard({ quest }) {
     }`}>
       <div className="p-3">
         <div className="flex items-start justify-between gap-2 mb-1.5">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-lg shrink-0">{rewardBadge || '⭐'}</span>
-            <div className="min-w-0">
-              <p className={`text-sm font-semibold truncate ${isCompleted ? 'text-poker-gold' : 'text-white'}`}>
-                {name}
-              </p>
-              <p className="text-[10px] text-gray-500 truncate">{description}</p>
-            </div>
+          <div className="min-w-0">
+            <p className={`text-sm font-semibold truncate ${isCompleted ? 'text-poker-gold' : 'text-white'}`}>
+              {name}
+            </p>
+            <p className="text-[10px] text-gray-500 truncate">{description}</p>
           </div>
           <span className={`shrink-0 text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
             isCompleted
@@ -86,13 +82,6 @@ function QuestCard({ quest }) {
           />
         </div>
 
-        {/* Sparkle overlay on completion */}
-        {isCompleted && (
-          <div className="absolute inset-0 pointer-events-none">
-            <div className="absolute top-1 left-3 text-[8px] opacity-60 animate-ping">✨</div>
-            <div className="absolute bottom-1 right-3 text-[8px] opacity-60 animate-ping delay-150">✨</div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -181,23 +170,6 @@ export default function QuestPanel() {
   }
   const sortedStats = Object.keys(byStat).sort((a, b) => byStat[b].length - byStat[a].length);
 
-  const statIcon = (stat) => {
-    if (stat === 'handsPlayed' || stat === 'handsWon') return '🃏';
-    if (stat.includes('Flop') || stat.includes('Turn') || stat.includes('River')) return '🃏';
-    if (stat.includes('Showdown')) return '⚔️';
-    if (stat.includes('Fold')) return '🛡️';
-    if (stat.includes('Call')) return '📞';
-    if (stat.includes('Raise') || stat.includes('Bet')) return '📈';
-    if (stat.includes('AllIn')) return '💀';
-    if (stat.includes('Pair') || stat.includes('TwoPair')) return '🎲';
-    if (stat.includes('Three') || stat.includes('Trips')) return '🎲';
-    if (stat.includes('Straight') && !stat.includes('Flush')) return '📏';
-    if (stat.includes('Flush') || stat.includes('FullHouse')) return '🌊';
-    if (stat.includes('Four') || stat.includes('Quads')) return '💎';
-    if (stat.includes('Royal')) return '👑';
-    return '⭐';
-  };
-
   const statLabel = (stat) => {
     // Convert camelCase to readable label
     return stat.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
@@ -219,7 +191,6 @@ export default function QuestPanel() {
                    transition-all duration-200 active:scale-95"
         title={`${completedQuests}/${totalQuests} quests completed`}
       >
-        <span className="text-base">🏆</span>
         <span className="text-xs font-bold">{completedQuests}/{totalQuests}</span>
       </button>
 
@@ -240,7 +211,6 @@ export default function QuestPanel() {
             {/* Header */}
             <div className="shrink-0 px-4 py-3 border-b border-gray-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xl">🏆</span>
                 <h2 className="text-base font-bold text-white">Quests</h2>
                 <span className="text-xs text-gray-500">
                   ({completedQuests}/{totalQuests} complete)
@@ -266,7 +236,7 @@ export default function QuestPanel() {
 
               {error && (
                 <div className="bg-red-900/30 border border-red-800/50 rounded-xl p-3 text-red-300 text-xs">
-                  ⚠️ {error}
+                  {error}
                 </div>
               )}
 
@@ -281,8 +251,8 @@ export default function QuestPanel() {
                 <>
                   {sortedStats.map(stat => (
                     <div key={stat}>
-                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                        <span>{statIcon(stat)}</span> {statLabel(stat)}
+                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                        {statLabel(stat)}
                       </h3>
                       <div className="space-y-2">
                         {byStat[stat].map(q => (

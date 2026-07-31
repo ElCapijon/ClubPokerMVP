@@ -13,7 +13,7 @@ const db = require('./db');
 const progressCache = new Map();
 
 // Cached challenge definitions (loaded once at server start)
-// Array of { id, stat, name, description, target_value, reward_badge }
+// Array of { id, stat, name, description, target_value }
 let definitionsCache = [];
 
 // Index definitions by stat name for O(1) lookup
@@ -118,7 +118,6 @@ function trackStat(userId, statName, amount = 1) {
         name: def.name,
         description: def.description,
         stat: def.stat,
-        badge: def.reward_badge || '⭐',
       };
 
       const socketId = userIdToSocket.get(userId);
@@ -151,7 +150,6 @@ async function getUserProgress(userId) {
     name: row.name,
     description: row.description,
     targetValue: row.target_value,
-    rewardBadge: row.reward_badge || '⭐',
     progress: row.progress || 0,
     isCompleted: row.is_completed || false,
     completedAt: row.completed_at,
