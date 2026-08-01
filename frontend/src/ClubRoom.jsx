@@ -287,8 +287,22 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       }
 
       if (data.players) {
+        // A genuine new hand (handCount advances forward; mount-time jumps
+        // 0 → N on a fresh join/rejoin are NOT new hands) clears transient
+        // hand flags for seats that are not dealt into this hand. Otherwise a
+        // player who went all-in last hand and busted would carry a stale
+        // isAllIn=true into the next hand, making the game treat them as an
+        // all-in participant (hiding Rebuy) when they are really a busted
+        // spectator. Players dealt into this hand get correct flags
+        // re-applied from data.players below.
+        const isNewHand = lastHandCountRef.current !== null
+          && (data.handCount ?? 0) > lastHandCountRef.current;
         setPlayers(prev => {
-          const updated = [...prev];
+          const updated = isNewHand
+            ? prev.map(existing => existing
+                ? { ...existing, isAllIn: false, isFolded: false, roundBet: 0 }
+                : existing)
+            : [...prev];
           for (const p of data.players) {
             const existing = updated[p.seatIndex];
             updated[p.seatIndex] = {
@@ -344,8 +358,20 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       }
 
       if (data.players) {
+        // Same new-hand reset as onGameStateSync: a rejoin snapshot arrives
+        // for the CURRENT hand. If that hand is newer than what this client
+        // last saw (e.g. the player was all-in, disconnected, busted, and the
+        // table dealt a new hand without them), clear stale transient flags
+        // so the game doesn't treat them as an all-in participant (hiding
+        // Rebuy) when they are really a busted spectator.
+        const isNewHand = lastHandCountRef.current !== null
+          && (data.handCount || 0) > lastHandCountRef.current;
         setPlayers(prev => {
-          const updated = [...prev];
+          const updated = isNewHand
+            ? prev.map(existing => existing
+                ? { ...existing, isAllIn: false, isFolded: false, roundBet: 0 }
+                : existing)
+            : [...prev];
           for (const p of data.players) {
             const existing = updated[p.seatIndex];
             updated[p.seatIndex] = {
@@ -620,6 +646,12 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const myPlayerData = players[mySeatIndex];
   const isMeFolded = myPlayerData?.isFolded;
   const isMeAllIn = myPlayerData?.isAllIn;
+  // A stack-0 player mid-hand is ALL-IN (still in the hand), not busted.
+  // E.g. posting a blind that empties their stack — the game must keep
+  // showing them as an all-in participant, not a busted spectator.
+  const inLiveHand = gameState === 'PREFLOP' || gameState === 'FLOP'
+    || gameState === 'TURN' || gameState === 'RIVER';
+  const isAllInMidHand = !!isMeAllIn && inLiveHand;
   const connectedPlayers = players.filter(p => p !== null);
   const isHost = players[mySeatIndex]?.isHost;
   const canAct = isMyTurn && !isMeFolded && !isMeAllIn;
@@ -1081,11 +1113,14 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
             <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
 
               {/* ===================== BUSTED / REBUY ===================== */}
-              {/* Show rebuy button whenever the player is busted (stack=0),
-                  regardless of game state. This lets them rebuy immediately
-                  after losing a hand, without waiting for the game to return
-                  to WAITING state. */}
-              {(myPlayerData?.stack === 0 || myPlayerData?.stack === undefined) && (
+              {/* Show rebuy whenever the player is truly busted (stack=0 AND
+                  not all-in in a live hand). A player who is merely all-in
+                  (e.g. posted a blind that emptied their stack) is still IN
+                  the hand — offering a Rebuy mid-hand would make the game
+                  look like it never registered the all-in. After the hand
+                  resolves (HAND_COMPLETE) an all-in loser's stack stays 0 and
+                  the Rebuy button appears. */}
+              {!isAllInMidHand && (myPlayerData?.stack === 0 || myPlayerData?.stack === undefined) && (
                 <>
                   <button onClick={handleRebuy}
                     className="px-4 py-2 bg-gradient-to-r from-poker-gold to-yellow-500 text-black font-bold rounded-xl
