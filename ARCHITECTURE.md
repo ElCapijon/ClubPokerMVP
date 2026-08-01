@@ -173,14 +173,16 @@ The main server file is a single large module (~600 lines) that handles:
 
 - **`broadcastGameState(clubId)`**: Sends public game state to all players plus private hole cards to each individual player via `your_hole_cards` event. This is the primary state sync mechanism.
 - **`setActionTimer(clubId)`**: Sets a timer for the current player. If it's a bot, processes their action after 0.8-2s. If it's a human, auto-folds after the configured timer (default 20s).
+- **`scheduleRunout(clubId, hand)`**: Deals out the remaining streets of an all-in runout one at a time (~1.8s apart), broadcasting each intermediate board (flop → turn → river → showdown) so players see the cards run out instead of all five appearing at once. Timers are tracked in `runoutTimers` and cancelled if the hand/table goes away.
 - **`checkAutoStart(clubId)`**: Automatically starts the game when all seated players are ready (called after `player_ready`, `add_bots`, or when seats fill).
 - **`recordAction(clubId, seatIndex, action, amount)`**: Records and broadcasts the last action for UI display.
 
 **Hand Completion Flow:**
-1. Player acts → round completes → showdown or all but one fold
-2. `hand_complete` event emitted with winners, hole cards, stacks
-3. Hand history persisted to database (non-blocking)
-4. After 12-second delay → next hand created → broadcast game state
+1. Player acts → round completes → showdown, all but one fold, **or** an all-in runout begins
+2. All-in runout: `handleAction` deals one street, then `scheduleRunout` deals the rest one at a time with broadcasts between
+3. `hand_complete` event emitted with winners, hole cards, stacks
+4. Hand history persisted to database (non-blocking, from `handleHandComplete`)
+5. After 12-second delay → next hand created → broadcast game state
 
 **Disconnect Handling:**
 - Player disconnects mid-hand → 60-second grace period
@@ -206,7 +208,8 @@ WAITING → PREFLOP → FLOP → TURN → RIVER → SHOWDOWN → HAND_COMPLETE �
 | `startHand(hand)` | Shuffles deck, deals 2 hole cards each, posts blinds, sets first turn (UTG). |
 | `handleAction(hand, seatIndex, action, amount)` | Core action processor. Validates turn, processes fold/check/call/raise, manages pot, checks for all-in, advances round/street/showdown. |
 | `advanceStreet(hand)` | Advances PREFLOP→FLOP→TURN→RIVER→SHOWDOWN. Burns a card before dealing each street. Resets round bets and `hasActed` flags. |
-| `advanceCompleteRounds(hand)` | Advances every street whose betting round is already complete (all-in runouts). When everyone remaining is all-in there's nobody to act, so the remaining streets deal straight through to showdown instead of stalling. |
+| `advanceCompleteRoundStep(hand)` | Advances **exactly one** street whose betting round is already complete (all-in runouts). When everyone remaining is all-in there's nobody to act, so the orchestrator calls this once per street, broadcasting each one so the board visibly runs out instead of all five cards appearing at once. Returns `true` if a street was dealt, `false` if nothing to advance. |
+| `advanceCompleteRounds(hand)` | Synchronous convenience wrapper that loops `advanceCompleteRoundStep` until the hand is done (used by tests; the live server uses `scheduleRunout` instead so each street is broadcast separately). |
 | `goToShowdown(hand)` | Evaluates all active players' hands, calls PotSplitter to determine winners, awards pot to stacks, sets gameStatus to HAND_COMPLETE. |
 | `getNextActivePlayerIndex(hand, fromIndex)` | Returns the next player clockwise who hasn't folded or gone all-in. |
 | `isRoundComplete(hand)` | Checks: all non-all-in players acted and matched bet, OR only 1 player remains, OR all remaining are all-in. |

@@ -454,21 +454,36 @@ function shuffleDeck(deck) {
 }
 
 /**
- * Advance the hand through every street whose betting round is already
+ * Advance the hand by exactly ONE street whose betting round is already
  * complete (e.g. all remaining players are all-in, or only one player
- * remains). Handles all-in runouts: when everyone left is all-in there is
- * nobody to act, so the remaining streets deal straight through to showdown.
- * Without this, the hand would stall mid-hand (e.g. stuck on the flop) with
- * currentPlayerIndex = -1 and no one to trigger the next street.
+ * remains). Returns true if a street was dealt (or showdown reached), false
+ * if there is nothing to advance.
+ *
+ * This is the single-step version the server orchestrator uses to deal an
+ * all-in runout street by street, broadcasting each one so the board visibly
+ * runs out (flop → turn → river) instead of dumping all five cards at once.
+ */
+function advanceCompleteRoundStep(hand) {
+  if (!isRoundComplete(hand) || hand.gameStatus === GAME_STATES.SHOWDOWN || isHandComplete(hand)) {
+    return false;
+  }
+  if (hand.gameStatus === GAME_STATES.RIVER || hand.players.filter(p => !p.isFolded).length <= 1) {
+    goToShowdown(hand);
+  } else {
+    advanceStreet(hand);
+  }
+  return true;
+}
+
+/**
+ * Advance the hand through every street whose betting round is already
+ * complete (all-in runout), dealing all remaining streets to showdown in one
+ * call. Equivalent to repeatedly calling advanceCompleteRoundStep. Kept for
+ * synchronous use (e.g. tests); the live server uses scheduleRunout so each
+ * street is broadcast separately.
  */
 function advanceCompleteRounds(hand) {
-  while (isRoundComplete(hand) && hand.gameStatus !== GAME_STATES.SHOWDOWN && !isHandComplete(hand)) {
-    if (hand.gameStatus === GAME_STATES.RIVER || hand.players.filter(p => !p.isFolded).length <= 1) {
-      goToShowdown(hand);
-    } else {
-      advanceStreet(hand);
-    }
-  }
+  while (advanceCompleteRoundStep(hand)) { /* keep dealing */ }
   return hand;
 }
 
@@ -596,7 +611,11 @@ function handleAction(hand, seatIndex, action, amount) {
 
   // Check if round is complete
   if (isRoundComplete(hand)) {
-    advanceCompleteRounds(hand);
+    // Deal the next street (or go straight to showdown). If the round remains
+    // complete afterwards — i.e. every remaining player is all-in — the server
+    // orchestrator (scheduleRunout) deals the rest one street at a time so the
+    // board visibly runs out instead of all cards appearing at once.
+    advanceCompleteRoundStep(hand);
   } else {
     // Move to next player
     hand.currentPlayerIndex = getNextActivePlayerIndex(hand, playerIndex);
@@ -613,6 +632,7 @@ module.exports = {
   getNextActivePlayerIndex,
   isRoundComplete,
   advanceStreet,
+  advanceCompleteRoundStep,
   advanceCompleteRounds,
   goToShowdown,
   isHandComplete,

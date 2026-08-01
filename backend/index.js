@@ -6,7 +6,7 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, handleAction, advanceCompleteRounds, getNextActivePlayerIndex } = require('./GameHand');
+const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, isRoundComplete, handleAction, advanceCompleteRoundStep, getNextActivePlayerIndex } = require('./GameHand');
 const ChallengeTracker = require('./ChallengeTracker');
 const HandStats = require('./HandStats');
 const pool = require('./db');
@@ -495,6 +495,10 @@ const disconnectTimeouts = new Map();
 // Map<gameId, timeoutId>
 const actionTimers = new Map();
 
+// All-in runout street timers (one pending timeout per game while the board
+// is running out). Map<gameId, timeoutId>
+const runoutTimers = new Map();
+
 // Last action per game
 // Map<gameId, { seatIndex, action, amount, timestamp }>
 const lastActions = new Map();
@@ -761,6 +765,92 @@ function clearActionTimer(gameId) {
   }
 }
 
+function clearRunoutTimer(gameId) {
+  if (runoutTimers.has(gameId)) {
+    clearTimeout(runoutTimers.get(gameId));
+    runoutTimers.delete(gameId);
+  }
+}
+
+/** Copy each player's stack from the hand back to the ring-game seat. */
+function syncSeatStacks(game, hand) {
+  for (const hp of hand.players) {
+    const s = game.seats[hp.seatIndex];
+    if (s) s.stack = hp.stack;
+  }
+}
+
+// Pause between streets while an all-in runout is being dealt. Gives players
+// time to see each card hit the board instead of all five at once.
+const RUNOUT_STREET_DELAY_MS = 1800;
+
+/**
+ * Broadcast the final state of a runout and complete the hand.
+ * Returns true if the hand was completed (and thus handled).
+ */
+function finalizeRunoutHand(gameId, hand) {
+  const g = ringGames.get(gameId);
+  if (!g || g.currentHand !== hand) return false;
+  syncSeatStacks(g, hand);
+  g.gameState = hand.gameStatus;
+  broadcastGameState(gameId);
+  if (isHandComplete(hand)) {
+    handleHandComplete(gameId, hand);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Deal out the remaining streets of an all-in runout one at a time, with a
+ * short pause between each, broadcasting every intermediate board so players
+ * see the flop → turn → river run out instead of all cards appearing at once.
+ *
+ * Called when a betting round completes but every remaining player is all-in
+ * (nobody left to act). Each street is dealt, shown, then the next one is
+ * scheduled until the hand reaches showdown. Timers are tracked in
+ * runoutTimers so they can be cancelled if the hand/table goes away.
+ */
+function scheduleRunout(gameId, hand) {
+  clearRunoutTimer(gameId);
+  clearActionTimer(gameId);
+
+  // If the runout already finished before the first timer could fire,
+  // finalize immediately rather than waiting.
+  if (isHandComplete(hand) || hand.gameStatus === GAME_STATES.SHOWDOWN) {
+    finalizeRunoutHand(gameId, hand);
+    return;
+  }
+
+  const dealNextStreet = () => {
+    const g = ringGames.get(gameId);
+    if (!g || g.currentHand !== hand) return; // hand replaced / table gone
+    clearRunoutTimer(gameId);
+
+    if (isHandComplete(hand) || hand.gameStatus === GAME_STATES.SHOWDOWN) {
+      finalizeRunoutHand(gameId, hand);
+      return;
+    }
+
+    // Deal the next street and broadcast it so the board visibly runs out.
+    advanceCompleteRoundStep(hand);
+    syncSeatStacks(g, hand);
+    g.gameState = hand.gameStatus;
+    broadcastGameState(gameId);
+
+    if (isHandComplete(hand)) {
+      handleHandComplete(gameId, hand);
+    } else if (isRoundComplete(hand)) {
+      // Everyone still all-in — deal the next street after a beat.
+      runoutTimers.set(gameId, setTimeout(dealNextStreet, RUNOUT_STREET_DELAY_MS));
+    }
+    // If the round somehow became open again (a live player can act), that
+    // cannot happen during a runout — every remaining player is all-in.
+  };
+
+  runoutTimers.set(gameId, setTimeout(dealNextStreet, RUNOUT_STREET_DELAY_MS));
+}
+
 function setActionTimer(gameId) {
   clearActionTimer(gameId);
 
@@ -772,23 +862,16 @@ function setActionTimer(gameId) {
 
   const currentPlayer = hand.players[hand.currentPlayerIndex];
   if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) {
-    // Defensive: nobody can act at the current index. This only happens when
-    // a betting round is already complete — e.g. everyone remaining is all-in
-    // (possibly from short-stack blinds). Run out the remaining streets to
-    // showdown so the game never stalls waiting on a phantom turn.
-    advanceCompleteRounds(hand);
-    game.gameState = hand.gameStatus; // keep ring-game state in sync with the hand
-    if (isHandComplete(hand)) {
-      for (const hp of hand.players) {
-        const s = game.seats[hp.seatIndex];
-        if (s) s.stack = hp.stack;
-      }
-      broadcastGameState(gameId);
-      handleHandComplete(gameId, hand);
+    // Defensive: nobody can act at the current index. If a betting round is
+    // already complete — e.g. everyone remaining is all-in (possibly from
+    // short-stack blinds) — deal out the remaining streets one at a time so
+    // the game never stalls on a phantom turn. Otherwise advance to the next
+    // player who can actually act.
+    if (isRoundComplete(hand)) {
+      game.gameState = hand.gameStatus; // keep ring-game state in sync
+      scheduleRunout(gameId, hand);
       return;
     }
-    // Round not complete but the current index is unusable — advance to the
-    // next player who can actually act.
     hand.currentPlayerIndex = getNextActivePlayerIndex(hand, hand.currentPlayerIndex);
     hand.actionStartTime = Date.now();
     if (hand.currentPlayerIndex >= 0) {
@@ -847,6 +930,8 @@ function setActionTimer(gameId) {
 
       if (isHandComplete(h)) {
         handleHandComplete(gameId, h);
+      } else if (isRoundComplete(h)) {
+        scheduleRunout(gameId, h);
       } else {
         setActionTimer(gameId);
       }
@@ -901,6 +986,8 @@ function setActionTimer(gameId) {
 
     if (isHandComplete(handNow)) {
       handleHandComplete(gameId, handNow);
+    } else if (isRoundComplete(handNow)) {
+      scheduleRunout(gameId, handNow);
     } else {
       setActionTimer(gameId);
     }
@@ -1054,6 +1141,7 @@ function deactivateGame(gameId) {
   const g = ringGames.get(gameId);
   if (!g) return;
   clearActionTimer(gameId);
+  clearRunoutTimer(gameId);
   ringGames.delete(gameId);
   pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId])
     .catch(err => console.error('[DB] Error deactivating game:', err.message));
@@ -1101,6 +1189,31 @@ function removeBustedBots(gameId) {
 function handleHandComplete(gameId, hand) {
   trackHandComplete(hand);
 
+  // Persist hand history. Done here so every completion path records it —
+  // human action, bot action, auto-fold, disconnect fold and all-in runouts.
+  try {
+    pool.query(
+      `INSERT INTO hand_histories (game_id, final_board, players_in_hand, pot_splits)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        gameId,
+        JSON.stringify(hand.communityCards),
+        JSON.stringify(hand.players.map(p => ({
+          seatIndex: p.seatIndex,
+          userName: p.userName,
+          holeCards: p.holeCards,
+          stack: p.stack,
+          betAmount: p.betAmount,
+          isFolded: p.isFolded,
+          isAllIn: p.isAllIn,
+        }))),
+        JSON.stringify(hand.handResult),
+      ]
+    ).catch(err => console.error('[DB] Hand history error:', err.message));
+  } catch (dbErr) {
+    console.error('[DB] Hand history error:', dbErr.message);
+  }
+
   io.to(gameRoom(gameId)).emit('hand_complete', {
     handResult: hand.handResult,
     communityCards: hand.communityCards,
@@ -1119,6 +1232,9 @@ function handleHandComplete(gameId, hand) {
     // Busted bots leave the table (free their seats) — done here so the
     // hand-complete showdown reveal stays visible for the full 12 seconds.
     removeBustedBots(gameId);
+
+    // No runout should still be pending once the hand is complete.
+    clearRunoutTimer(gameId);
 
     // If no human players remain, close the table entirely
     if (!hasHumanPlayer(g)) {
@@ -1525,30 +1641,11 @@ io.on('connection', (socket) => {
         const hand = game.currentHand;
         lastActions.delete(gameId);
 
-        try {
-          pool.query(
-            `INSERT INTO hand_histories (game_id, final_board, players_in_hand, pot_splits)
-             VALUES ($1, $2, $3, $4)`,
-            [
-              gameId,
-              JSON.stringify(hand.communityCards),
-              JSON.stringify(hand.players.map(p => ({
-                seatIndex: p.seatIndex,
-                userName: p.userName,
-                holeCards: p.holeCards,
-                stack: p.stack,
-                betAmount: p.betAmount,
-                isFolded: p.isFolded,
-                isAllIn: p.isAllIn,
-              }))),
-              JSON.stringify(hand.handResult),
-            ]
-          ).catch(err => console.error('[DB] Hand history error:', err.message));
-        } catch (dbErr) {
-          console.error('[DB] Hand history error:', dbErr.message);
-        }
-
         handleHandComplete(gameId, hand);
+      } else if (isRoundComplete(game.currentHand)) {
+        // Every remaining player is all-in — deal the rest of the board one
+        // street at a time so the runout is visible.
+        scheduleRunout(gameId, game.currentHand);
       } else {
         setActionTimer(gameId);
       }
@@ -1954,7 +2051,11 @@ io.on('connection', (socket) => {
                         if (s) s.stack = hp.stack;
                       }
                       broadcastGameState(gameId);
-                      if (!isHandComplete(hand)) {
+                      if (isHandComplete(hand)) {
+                        handleHandComplete(gameId, hand);
+                      } else if (isRoundComplete(hand)) {
+                        scheduleRunout(gameId, hand);
+                      } else {
                         setActionTimer(gameId);
                       }
                     }

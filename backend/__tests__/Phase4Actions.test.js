@@ -1,6 +1,7 @@
 const {
   GAME_STATES, createHand, startHand, handleAction,
-  getNextActivePlayerIndex, isRoundComplete, advanceStreet, advanceCompleteRounds
+  getNextActivePlayerIndex, isRoundComplete, isHandComplete,
+  advanceStreet, advanceCompleteRounds, advanceCompleteRoundStep
 } = require('../GameHand');
 
 function createClubState() {
@@ -82,14 +83,22 @@ describe('Phase 4 - Action Edge Cases', () => {
 
       // Every player shoves all-in
       let guard = 0;
-      while (hand.gameStatus !== GAME_STATES.HAND_COMPLETE && guard < 10) {
+      while (guard < 10) {
         guard++;
         const pIdx = hand.currentPlayerIndex;
-        if (pIdx < 0) break; // no one left to act — the bug stalls here
+        if (pIdx < 0) break; // no one left to act
         const p = hand.players[pIdx];
         const allInTotal = p.roundBet + p.stack;
         const r = handleAction(hand, p.seatIndex, 'raise', allInTotal);
         if (r.error) handleAction(hand, p.seatIndex, 'call');
+      }
+
+      // handleAction only deals ONE street; the orchestrator (scheduleRunout)
+      // drives the rest one step at a time. Simulate that loop here.
+      let streetGuard = 0;
+      while (!isHandComplete(hand) && streetGuard < 6) {
+        streetGuard++;
+        advanceCompleteRoundStep(hand);
       }
 
       // The hand must run out all five community cards and reach showdown
@@ -97,6 +106,43 @@ describe('Phase 4 - Action Edge Cases', () => {
       expect(hand.communityCards.length).toBe(5);
       expect(hand.handResult).toBeDefined();
       expect(hand.pot).toBeGreaterThan(0);
+    });
+
+    test('all-in runout deals streets one at a time (staged, not all at once)', () => {
+      const club = createClubState();
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      // Every player shoves all-in preflop
+      let guard = 0;
+      while (guard < 10) {
+        guard++;
+        const pIdx = hand.currentPlayerIndex;
+        if (pIdx < 0) break;
+        const p = hand.players[pIdx];
+        const r = handleAction(hand, p.seatIndex, 'raise', p.roundBet + p.stack);
+        if (r.error) handleAction(hand, p.seatIndex, 'call');
+      }
+
+      // The completing shove deals exactly ONE street (the flop) — the rest
+      // must be driven one step at a time so the server can broadcast each.
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+      expect(hand.communityCards.length).toBe(3);
+
+      advanceCompleteRoundStep(hand); // → turn
+      expect(hand.gameStatus).toBe(GAME_STATES.TURN);
+      expect(hand.communityCards.length).toBe(4);
+
+      advanceCompleteRoundStep(hand); // → river
+      expect(hand.gameStatus).toBe(GAME_STATES.RIVER);
+      expect(hand.communityCards.length).toBe(5);
+
+      advanceCompleteRoundStep(hand); // → showdown
+      expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
+      expect(hand.handResult).toBeDefined();
+
+      // Nothing left to advance after the hand is complete
+      expect(advanceCompleteRoundStep(hand)).toBe(false);
     });
   });
 
@@ -370,9 +416,18 @@ describe('Phase 4 - Action Edge Cases', () => {
       // Turn goes to Bob — never to the all-in BB
       expect(hand.players[hand.currentPlayerIndex].seatIndex).toBe(bobSeat);
 
-      // Bob calls all-in → everyone is all-in → board runs out automatically
+      // Bob calls all-in → everyone is all-in → one street is dealt; the
+      // orchestrator then runs out the rest one street at a time.
       const r2 = handleAction(hand, bobSeat, 'raise', 100);
       expect(r2.error).toBeNull();
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+      expect(hand.communityCards.length).toBe(3);
+
+      let streetGuard = 0;
+      while (!isHandComplete(hand) && streetGuard < 6) {
+        streetGuard++;
+        advanceCompleteRoundStep(hand);
+      }
       expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
       expect(hand.communityCards.length).toBe(5);
       expect(hand.handResult).toBeDefined();
