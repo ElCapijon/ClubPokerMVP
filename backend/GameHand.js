@@ -603,7 +603,12 @@ function getPublicState(hand) {
   const totalMs = (hand.gameStatus === GAME_STATES.SHOWDOWN && hand.showdown)
     ? (hand.showdown.decisionSeconds || 12) * 1000
     : (hand.actionTimer || 20) * 1000;
-  const remaining = Math.max(0, Math.ceil((totalMs - elapsed) / 1000));
+  // No countdown while the settled round sits waiting to advance (deferred
+  // advance: currentPlayerIndex = -1) — nobody can act, so a ticking clock
+  // with no actor would just look broken.
+  const remaining = hand.currentPlayerIndex >= 0
+    ? Math.max(0, Math.ceil((totalMs - elapsed) / 1000))
+    : 0;
 
   // Interactive showdown reveal phase — which seats' cards are exposed, who
   // must decide next, and whether the current decider may muck.
@@ -761,7 +766,7 @@ function advanceCompleteRounds(hand) {
  * NOTE: This is the Phase 4 action handler — basic implementation here
  * for the state machine, but full validation in Phase 4.
  */
-function handleAction(hand, seatIndex, action, amount) {
+function handleAction(hand, seatIndex, action, amount, opts = {}) {
   // Reject actions on completed hands and during the interactive showdown
   // reveal phase (no betting happens there — a stray fold/call must not be
   // able to strip a live player's pot eligibility).
@@ -881,11 +886,23 @@ function handleAction(hand, seatIndex, action, amount) {
 
   // Check if round is complete
   if (isRoundComplete(hand)) {
-    // Deal the next street (or go straight to showdown). If the round remains
-    // complete afterwards — i.e. every remaining player is all-in — the server
-    // orchestrator (scheduleRunout) deals the rest one street at a time so the
-    // board visibly runs out instead of all cards appearing at once.
-    advanceCompleteRoundStep(hand);
+    if (opts.deferAdvance) {
+      // Deferred advance: leave the settled round intact (roundBet values
+      // stay visible) so the server can broadcast it BEFORE dealing the next
+      // street — otherwise the final call of a round (every call in heads-up)
+      // never displays its chips in front of the seat, since the street
+      // advance resets roundBet to 0 first. The orchestrator schedules the
+      // advance after a short beat. Nobody can act while the round is
+      // complete, so clear the current turn.
+      hand.currentPlayerIndex = -1;
+      hand.actionStartTime = Date.now();
+    } else {
+      // Deal the next street (or go straight to showdown). If the round remains
+      // complete afterwards — i.e. every remaining player is all-in — the server
+      // orchestrator (scheduleRunout) deals the rest one street at a time so the
+      // board visibly runs out instead of all cards appearing at once.
+      advanceCompleteRoundStep(hand);
+    }
   } else {
     // Move to next player
     hand.currentPlayerIndex = getNextActivePlayerIndex(hand, playerIndex);

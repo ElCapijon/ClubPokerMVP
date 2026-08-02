@@ -713,5 +713,41 @@ describe('Phase 4 - Action Edge Cases', () => {
 
       expect(hand.gameStatus).toBe(GAME_STATES.TURN);
     });
+
+    test('deferred advance: round-completing call keeps bets visible, then advances', () => {
+      const club = createClubState();
+      // Heads-up (two of three seats occupied): every call completes the round.
+      club.seats[2] = null;
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      // SB calls, BB checks — heads-up, this completes pre-flop action.
+      // The final call uses deferAdvance (as the live server always does).
+      let r = handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call', undefined, { deferAdvance: true });
+      expect(r.error).toBeNull();
+      const bb = hand.players[hand.currentPlayerIndex];
+      expect(bb.roundBet).toBe(club.tableSettings.bb);
+      r = handleAction(hand, bb.seatIndex, 'call', undefined, { deferAdvance: true });
+      expect(r.error).toBeNull();
+
+      // Round complete but NOT yet advanced: the caller's chips stay visible
+      // in front of their seat (roundBet intact) so the server can broadcast
+      // them before dealing the flop.
+      expect(isRoundComplete(hand)).toBe(true);
+      expect(hand.gameStatus).toBe(GAME_STATES.PREFLOP);
+      expect(hand.communityCards.length).toBe(0);
+      expect(hand.players[0].roundBet).toBe(club.tableSettings.bb);
+      expect(hand.players[1].roundBet).toBe(club.tableSettings.bb);
+      // Nobody can act while the round sits settled.
+      expect(hand.currentPlayerIndex).toBe(-1);
+
+      // The orchestrator then advances (after the settle beat) — the street
+      // deals and round bets reset exactly as before.
+      expect(advanceCompleteRoundStep(hand)).toBe(true);
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+      expect(hand.communityCards.length).toBe(3);
+      expect(hand.players[0].roundBet).toBe(0);
+      expect(hand.players[1].roundBet).toBe(0);
+    });
   });
 });

@@ -929,6 +929,13 @@ function syncSeatStacks(game, hand) {
 // time to see each card hit the board instead of all five at once.
 const RUNOUT_STREET_DELAY_MS = 1800;
 
+// Short beat after a betting round completes (e.g. a heads-up call) before the
+// next street is dealt, so the settled bets visibly land in front of the seats.
+// The street advance resets every roundBet to 0, so without this delay the
+// client would never see the round-completing chips (every call in heads-up
+// completes the round).
+const ROUND_SETTLE_DELAY_MS = 1000;
+
 /**
  * Broadcast the final state of a runout and complete the hand.
  * Returns true if the hand was completed (and thus handled).
@@ -956,7 +963,7 @@ function finalizeRunoutHand(gameId, hand) {
  * scheduled until the hand reaches showdown. Timers are tracked in
  * runoutTimers so they can be cancelled if the hand/table goes away.
  */
-function scheduleRunout(gameId, hand) {
+function scheduleRunout(gameId, hand, firstDelayMs = RUNOUT_STREET_DELAY_MS) {
   clearRunoutTimer(gameId);
   clearActionTimer(gameId);
 
@@ -986,11 +993,28 @@ function scheduleRunout(gameId, hand) {
       return;
     }
 
+    const prevStatus = g.gameState;
     // Deal the next street and broadcast it so the board visibly runs out.
     advanceCompleteRoundStep(hand);
     syncSeatStacks(g, hand);
     g.gameState = hand.gameStatus;
     broadcastGameState(gameId);
+
+    // Street-seen stats (flopsSeen / turnsSeen / riversSeen). The street
+    // transition happens HERE now: actions that complete a round defer their
+    // advance (see handleAction deferAdvance) so the settled bets stay visible
+    // for the settle delay, so the old player_action status check never fires.
+    const streetStat = {
+      'FLOP': 'flopsSeen',
+      'TURN': 'turnsSeen',
+      'RIVER': 'riversSeen',
+    }[hand.gameStatus];
+    if (streetStat && prevStatus !== hand.gameStatus) {
+      const activePlayers = hand.players.filter(p => !p.isFolded && !p.isAllIn);
+      activePlayers.forEach(p => {
+        if (p.userId) ChallengeTracker.trackStat(p.userId, streetStat, 1);
+      });
+    }
 
     if (isHandComplete(hand)) {
       handleHandComplete(gameId, hand);
@@ -998,14 +1022,17 @@ function scheduleRunout(gameId, hand) {
       // Runout reached showdown with a live player — start the reveal phase.
       startShowdownTimer(gameId);
     } else if (isRoundComplete(hand)) {
-      // Everyone still all-in — deal the next street after a beat.
+      // Everyone still all-in (or a lone live player vs all-in opponents) —
+      // deal the next street after a beat.
       runoutTimers.set(gameId, setTimeout(dealNextStreet, RUNOUT_STREET_DELAY_MS));
+    } else {
+      // The new street is open — live players can act again (e.g. a normal
+      // heads-up call that deferred its advance). Arm the action timer.
+      setActionTimer(gameId);
     }
-    // If the round somehow became open again (a live player can act), that
-    // cannot happen during a runout — every remaining player is all-in.
   };
 
-  runoutTimers.set(gameId, setTimeout(dealNextStreet, RUNOUT_STREET_DELAY_MS));
+  runoutTimers.set(gameId, setTimeout(dealNextStreet, firstDelayMs));
 }
 
 /**
@@ -1161,11 +1188,11 @@ function setActionTimer(gameId) {
         const decision = BotPlayer.decideAction(h, p.seatIndex, g);
         console.log(`[Bot] ${p.userName} decides to ${decision.action}${decision.amount ? ' ' + decision.amount : ''}`);
 
-        const result = handleAction(h, p.seatIndex, decision.action, decision.amount);
+        const result = handleAction(h, p.seatIndex, decision.action, decision.amount, { deferAdvance: true });
         if (result.error) {
           console.error(`[Bot] Action error: ${result.error}`);
           // Fallback: fold
-          const fallback = handleAction(h, p.seatIndex, 'fold');
+          const fallback = handleAction(h, p.seatIndex, 'fold', { deferAdvance: true });
           if (fallback.error) return;
         }
 
@@ -1186,7 +1213,7 @@ function setActionTimer(gameId) {
         } else if (h.gameStatus === GAME_STATES.SHOWDOWN) {
           startShowdownTimer(gameId);
         } else if (isRoundComplete(h)) {
-          scheduleRunout(gameId, h);
+          scheduleRunout(gameId, h, ROUND_SETTLE_DELAY_MS);
         } else {
           setActionTimer(gameId);
         }
@@ -1217,7 +1244,7 @@ function setActionTimer(gameId) {
     const seatIdx = player.seatIndex;
     console.log(`[Auto-Fold] ${player.userName} auto-folded (timeout)`);
 
-    const result = handleAction(handNow, seatIdx, 'fold');
+    const result = handleAction(handNow, seatIdx, 'fold', { deferAdvance: true });
     if (result.error) return;
 
     // Count the auto-fold in the hand tracker (only after a successful action)
@@ -1246,7 +1273,7 @@ function setActionTimer(gameId) {
     } else if (handNow.gameStatus === GAME_STATES.SHOWDOWN) {
       startShowdownTimer(gameId);
     } else if (isRoundComplete(handNow)) {
-      scheduleRunout(gameId, handNow);
+      scheduleRunout(gameId, handNow, ROUND_SETTLE_DELAY_MS);
     } else {
       setActionTimer(gameId);
     }
@@ -1907,7 +1934,7 @@ io.on('connection', (socket) => {
         return callback && callback({ error: 'No game in progress' });
       }
 
-      const result = handleAction(game.currentHand, playerInfo.seatIndex, action, amount);
+      const result = handleAction(game.currentHand, playerInfo.seatIndex, action, amount, { deferAdvance: true });
 
       if (result.error) {
         return callback && callback({ error: result.error });
@@ -1933,23 +1960,10 @@ io.on('connection', (socket) => {
         if (player && player.isAllIn) HandStats.trackStat(actingUserId, 'all_ins', 1);
       }
 
-      if (game.currentHand && (game.currentHand.gameStatus === 'FLOP' || game.currentHand.gameStatus === 'TURN' || game.currentHand.gameStatus === 'RIVER')) {
-        const prevStatus = game.gameState;
-        const newStatus = game.currentHand.gameStatus;
-        const streetStat = {
-          'FLOP': 'flopsSeen',
-          'TURN': 'turnsSeen',
-          'RIVER': 'riversSeen',
-        }[newStatus];
-        if (streetStat && prevStatus !== newStatus) {
-          const activePlayers = game.currentHand.players.filter(p => !p.isFolded && !p.isAllIn);
-          activePlayers.forEach(p => {
-            if (p.userId) {
-              ChallengeTracker.trackStat(p.userId, streetStat, 1);
-            }
-          });
-        }
-      }
+      // NOTE: street-seen stats (flopsSeen etc.) are tracked in
+      // scheduleRunout's dealNextStreet — the street transition happens there
+      // now, because round-completing actions defer their advance so the
+      // settled bets stay visible before the next street is dealt.
 
       game.gameState = game.currentHand.gameStatus;
 
@@ -1972,9 +1986,10 @@ io.on('connection', (socket) => {
         // River betting is done — run the interactive showdown reveal phase.
         startShowdownTimer(gameId);
       } else if (isRoundComplete(game.currentHand)) {
-        // Every remaining player is all-in — deal the rest of the board one
-        // street at a time so the runout is visible.
-        scheduleRunout(gameId, game.currentHand);
+        // The betting round settled — let the chips visibly land in front of
+        // the seats for a beat, then deal the next street (or run out the
+        // board if everyone remaining is all-in).
+        scheduleRunout(gameId, game.currentHand, ROUND_SETTLE_DELAY_MS);
       } else {
         setActionTimer(gameId);
       }
@@ -2431,7 +2446,7 @@ io.on('connection', (socket) => {
                   const playerInHand = hand.players.find(p => p.seatIndex === seatIndex);
                   if (playerInHand && !playerInHand.isFolded && !playerInHand.isAllIn) {
                     clearActionTimer(gameId);
-                    const result = handleAction(hand, seatIndex, 'fold');
+                    const result = handleAction(hand, seatIndex, 'fold', { deferAdvance: true });
                     if (!result.error) {
                       console.log(`[Auto-Fold] ${seat.userName} folded due to disconnect timeout`);
                       if (seat) seat.isSittingOut = true;
@@ -2446,7 +2461,7 @@ io.on('connection', (socket) => {
                       } else if (hand.gameStatus === GAME_STATES.SHOWDOWN) {
                         startShowdownTimer(gameId);
                       } else if (isRoundComplete(hand)) {
-                        scheduleRunout(gameId, hand);
+                        scheduleRunout(gameId, hand, ROUND_SETTLE_DELAY_MS);
                       } else {
                         setActionTimer(gameId);
                       }
