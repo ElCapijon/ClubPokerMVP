@@ -1021,11 +1021,14 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                       </div>
                     )}
 
-                    {/* Avatar ring — pulsing green if active turn */}
+                    {/* Avatar ring — pulsing green if active turn (bright so it
+                        clearly reads at a glance; the isMe gold ring only shows
+                        when it is NOT your turn, so it never dims the turn glow) */}
                     <div className={`
-                      rounded-full p-0.5 transition-all duration-300
-                      ${isActiveTurn ? 'bg-green-400/40 animate-pulse-turn shadow-lg shadow-green-400/30' : 'bg-transparent'}
-                      ${isMe     ? 'bg-poker-gold/30' : ''}
+                      rounded-full p-1 transition-all duration-300
+                      ${isActiveTurn
+                        ? 'bg-green-400/90 animate-pulse-turn shadow-lg shadow-green-400/60'
+                        : isMe ? 'bg-poker-gold/30' : 'bg-transparent'}
                     `}>
                       <div className={`
                         w-9 h-9 sm:w-11 sm:h-11 rounded-full relative overflow-hidden

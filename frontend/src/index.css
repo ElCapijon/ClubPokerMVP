@@ -358,13 +358,15 @@
   animation: bounceSubtle 2s ease-in-out infinite;
 }
 
-/* Pulse turn (for active player highlight) */
+/* Pulse turn (for active player highlight) — a strong, breathing glow so the
+   acting player is obvious at a glance. Green-400 (#4ade80) with a spread and
+   an outer halo, peaking at 50% then relaxing back. */
 @keyframes pulseTurn {
   0%, 100% {
-    box-shadow: 0 0 15px rgba(34, 197, 94, 0.15);
+    box-shadow: 0 0 10px 2px rgba(74, 222, 128, 0.5), 0 0 28px rgba(74, 222, 128, 0.3);
   }
   50% {
-    box-shadow: 0 0 25px rgba(34, 197, 94, 0.3);
+    box-shadow: 0 0 16px 5px rgba(74, 222, 128, 0.8), 0 0 48px rgba(74, 222, 128, 0.5);
   }
 }
 
