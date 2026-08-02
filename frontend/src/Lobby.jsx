@@ -10,10 +10,15 @@ function StakeCard({ level, bankroll, onJoin }) {
   // Generate consistent color per stake level
   const colors = {
     micro: { bg: 'from-emerald-600 to-emerald-800', badge: 'bg-emerald-500/20 text-emerald-400' },
-    low: { bg: 'from-blue-600 to-blue-800', badge: 'bg-blue-500/20 text-blue-400' },
-    medium: { bg: 'from-purple-600 to-purple-800', badge: 'bg-purple-500/20 text-purple-400' },
-    high: { bg: 'from-rose-600 to-rose-800', badge: 'bg-rose-500/20 text-rose-400' },
-    ultra: { bg: 'from-orange-600 to-orange-800', badge: 'bg-orange-500/20 text-orange-400' },
+    low: { bg: 'from-teal-600 to-teal-800', badge: 'bg-teal-500/20 text-teal-400' },
+    medium: { bg: 'from-blue-600 to-blue-800', badge: 'bg-blue-500/20 text-blue-400' },
+    high: { bg: 'from-indigo-600 to-indigo-800', badge: 'bg-indigo-500/20 text-indigo-400' },
+    expert: { bg: 'from-purple-600 to-purple-800', badge: 'bg-purple-500/20 text-purple-400' },
+    elite: { bg: 'from-violet-600 to-violet-800', badge: 'bg-violet-500/20 text-violet-400' },
+    master: { bg: 'from-fuchsia-600 to-fuchsia-800', badge: 'bg-fuchsia-500/20 text-fuchsia-400' },
+    legend: { bg: 'from-pink-600 to-pink-800', badge: 'bg-pink-500/20 text-pink-400' },
+    millionaire: { bg: 'from-amber-600 to-amber-800', badge: 'bg-amber-500/20 text-amber-400' },
+    titan: { bg: 'from-orange-600 to-orange-800', badge: 'bg-orange-500/20 text-orange-400' },
     superHigh: { bg: 'from-red-700 to-red-900', badge: 'bg-red-500/20 text-red-400' },
   };
   const c = colors[level.key] || colors.micro;

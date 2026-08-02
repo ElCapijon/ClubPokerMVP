@@ -72,7 +72,7 @@ async function sendWelcomeEmail(to, displayName) {
                   <span class="stat-label">Starting Chips</span>
                 </div>
                 <div class="stat">
-                  <span class="stat-value">6</span>
+                  <span class="stat-value">11</span>
                   <span class="stat-label">Stake Levels</span>
                 </div>
               </div>
