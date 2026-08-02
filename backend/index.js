@@ -17,7 +17,7 @@ const { sendWelcomeEmail, sendPasswordResetEmail } = require('./email');
 // entirely (the add_bots/remove_bots handlers refuse and the host buttons are
 // hidden). To REMOVE bots for good: delete backend/BotPlayer.js, the flag, and
 // every `// ── BOTS ──` section below + the bot UI in ClubRoom.jsx.
-const BOTS_ENABLED = false;
+const BOTS_ENABLED = true;
 const BotPlayer = require('./BotPlayer');
 // ────────────────────────────────────────────────────────────
 // Map rank number to stat name for hand rank tracking
@@ -221,11 +221,16 @@ app.post('/api/games/leave', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Not seated at any table' });
     }
 
+    // CLAIM the stack synchronously BEFORE any DB work: a concurrent refund
+    // path (e.g. the disconnect safety net firing from a page reload) reads
+    // seat.stack too — once we zero it, it can never double-credit the same
+    // chips. If the refund fails we give the stack back.
     const refundAmount = foundSeat.stack || 0;
+    foundSeat.stack = 0;
 
-    // Refund to bankroll — ONLY clear seat if refund succeeds
+    // Refund to bankroll + close session atomically — ONLY clear seat if it succeeds
     try {
-      const newBankroll = await addToBankroll(userId, refundAmount);
+      const newBankroll = await refundAndCloseSession(userId, foundSeat.sessionId, refundAmount);
       console.log(`[Leave-HTTP] ${foundSeat.userName} refunded ${refundAmount} chips. New bankroll: ${newBankroll}`);
 
       // Remove the player from socketToPlayer and have their socket leave the game room.
@@ -245,6 +250,7 @@ app.post('/api/games/leave', authenticateToken, async (req, res) => {
       return res.json({ success: true, refundAmount, bankroll: newBankroll });
     } catch (e) {
       console.error('[Leave-HTTP] Refund failed:', e.message);
+      foundSeat.stack = refundAmount; // give the chips back — player can retry
       // Seat stays — player can retry or disconnect handler will catch
       return res.status(500).json({ error: 'Failed to refund, seat preserved' });
     }
@@ -561,13 +567,51 @@ async function deductBankroll(userId, amount) {
   return parseInt(result.rows[0].bankroll);
 }
 
-/** Add to bankroll and return new balance */
-async function addToBankroll(userId, amount) {
-  const result = await pool.query(
-    'UPDATE users SET bankroll = bankroll + $1 WHERE id = $2 RETURNING bankroll',
-    [amount, userId]
-  );
-  return parseInt(result.rows[0].bankroll);
+/**
+ * Exactly-once cash refund: credits the bankroll AND closes the player session
+ * in a single DB transaction. If anything fails, NOTHING is credited or closed
+ * (rollback), so a caller can restore the seat stack and let the player retry.
+ *
+ * This closes the double-refund hole: a refund that succeeded but left the
+ * player_sessions row open would be refunded AGAIN later by
+ * recoverOrphanedSessions() — crediting the same chips twice. With the
+ * transaction, an open row can only ever mean the chips are genuinely still on
+ * a table, so recovery stays safe.
+ *
+ * Lock order is session row → users row, matching recoverOrphanedSessions()
+ * (sessions first), so a same-player refund racing a recovery can never hit a
+ * lock-order inversion deadlock.
+ *
+ * @returns {Promise<number>} new bankroll balance
+ */
+async function refundAndCloseSession(userId, sessionId, amount) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (sessionId) {
+      await client.query('SELECT id FROM player_sessions WHERE id = $1 FOR UPDATE', [sessionId]);
+    }
+    const bankrollResult = await client.query(
+      'UPDATE users SET bankroll = bankroll + $1 WHERE id = $2 RETURNING bankroll',
+      [amount, userId]
+    );
+    if (!bankrollResult.rows[0]) {
+      throw new Error('USER_NOT_FOUND');
+    }
+    if (sessionId) {
+      await client.query(
+        'UPDATE player_sessions SET current_stack = $1, left_at = NOW() WHERE id = $2',
+        [amount, sessionId]
+      );
+    }
+    await client.query('COMMIT');
+    return parseInt(bankrollResult.rows[0].bankroll);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** Notify a player's socket about bankroll change */
@@ -1663,6 +1707,35 @@ io.on('connection', (socket) => {
         return callback && callback({ error: `Buy-in must be between ${config.minBuyin} and ${config.maxBuyin} chips` });
       }
 
+      // If the user is ALREADY seated at a table for this stake level (e.g. a
+      // duplicate join re-emitted after a reload), do NOT charge a second
+      // buy-in or create a second seat — just return the existing seat so the
+      // client re-enters cleanly. Without this, a double-join would also close
+      // the user's live session row via the stale-session cleanup below and
+      // leave their chips on a table with no durable record.
+      for (const [gid, g] of ringGames) {
+        if (g.stakeLevel === stakeLevel) {
+          const existingIdx = g.seats.findIndex(s => s && s.userId === userId);
+          if (existingIdx !== -1) {
+            const existingSeat = g.seats[existingIdx];
+            existingSeat.isConnected = true;
+            socket.join(gameRoom(g.id));
+            socketToPlayer.set(socket.id, { gameId: g.id, userId, seatIndex: existingIdx });
+            const bankroll = await getBankroll(userId);
+            notifyBankroll(userId, bankroll);
+            console.log(`[Join] ${displayName} already seated at "${g.tableName}" — re-entering seat ${existingIdx}`);
+            return callback && callback(null, {
+              gameId: g.id,
+              tableName: g.tableName,
+              userId,
+              seatIndex: existingIdx,
+              minBuyin: g.minBuyin,
+              maxBuyin: g.maxBuyin,
+            });
+          }
+        }
+      }
+
       // Check bankroll
       let newBankroll;
       try {
@@ -1686,6 +1759,21 @@ io.on('connection', (socket) => {
       // If newly created, set the first joiner as host
       if (isNew) {
         game.hostId = userId;
+      }
+
+      // Defensive: close any stale OPEN session for this user+game before
+      // creating a fresh one. A leftover open row (from a refund whose session
+      // close failed, or a pre-fix bug) would otherwise be double-refunded by
+      // recoverOrphanedSessions() on top of this live buy-in. With the
+      // transactional refundAndCloseSession this should never happen, but
+      // closing here makes double-credits impossible even for old bad rows.
+      try {
+        await pool.query(
+          'UPDATE player_sessions SET left_at = NOW() WHERE user_id = $1 AND game_id = $2 AND left_at IS NULL',
+          [userId, gameId]
+        );
+      } catch (dbErr) {
+        console.error('[DB] Error closing stale session:', dbErr.message);
       }
 
       // Create player session
@@ -1814,27 +1902,21 @@ io.on('connection', (socket) => {
         return callback && callback({ error: 'Not seated at this table' });
       }
 
+      // CLAIM the stack synchronously BEFORE any DB work so a concurrent
+      // refund path (e.g. the disconnect safety net) cannot double-credit the
+      // same chips. If the refund fails we give the stack back and let the
+      // player retry instead of silently clearing a seat whose chips were lost.
       const cashOutAmount = seat.stack || 0;
+      seat.stack = 0;
 
-      // Add stack back to bankroll
+      // Refund to bankroll + close the session atomically (exactly-once)
       let newBankroll;
       try {
-        newBankroll = await addToBankroll(socket.userId, cashOutAmount);
+        newBankroll = await refundAndCloseSession(socket.userId, seat.sessionId, cashOutAmount);
       } catch (e) {
         console.error('[DB] Error adding to bankroll:', e.message);
-        newBankroll = await getBankroll(socket.userId);
-      }
-
-      // Update player session
-      if (seat.sessionId) {
-        try {
-          await pool.query(
-            'UPDATE player_sessions SET current_stack = $1, left_at = NOW() WHERE id = $2',
-            [cashOutAmount, seat.sessionId]
-          );
-        } catch (dbErr) {
-          console.error('[DB] Error updating player session:', dbErr.message);
-        }
+        seat.stack = cashOutAmount; // give the chips back — player can retry
+        return callback && callback({ error: 'Failed to cash out, please retry' });
       }
 
       // Remove from seat
@@ -2220,14 +2302,17 @@ io.on('connection', (socket) => {
         return callback && callback({ error: 'Nothing to refund' });
       }
 
-      const newBankroll = await addToBankroll(socket.userId, refundAmount);
+      // CLAIM the stack synchronously so a concurrent refund path (disconnect
+      // safety net, another leave) cannot double-credit the same chips.
+      seat.stack = 0;
 
-      // Update session
-      if (seat.sessionId) {
-        pool.query(
-          'UPDATE player_sessions SET current_stack = $1, left_at = NOW() WHERE id = $2',
-          [0, seat.sessionId]
-        ).catch(err => console.error('[DB] Error:', err.message));
+      let newBankroll;
+      try {
+        newBankroll = await refundAndCloseSession(socket.userId, seat.sessionId, refundAmount);
+      } catch (err) {
+        console.error('[Refund-Manual] Refund failed:', err.message);
+        seat.stack = refundAmount; // give the chips back — player can retry
+        return callback && callback({ error: 'Refund failed, please retry' });
       }
 
       // Clear seat
@@ -2412,8 +2497,11 @@ io.on('connection', (socket) => {
           if (game.gameState === 'WAITING') {
             const refundAmount = seat.stack || 0;
             if (refundAmount > 0) {
-              // Await the refund before touching the seat
-              addToBankroll(userId, refundAmount)
+              // CLAIM the stack synchronously so a concurrent leave/cash-out
+              // refund of this same seat sees 0 and cannot double-credit.
+              seat.stack = 0;
+              // Refund + close the session atomically before touching the seat
+              refundAndCloseSession(userId, seat.sessionId, refundAmount)
                 .then(newBankroll => {
                   console.log(`[Refund] ${seat.userName} refunded ${refundAmount} chips (game never started). New bankroll: ${newBankroll}`);
                   notifyBankroll(userId, newBankroll);
@@ -2424,7 +2512,7 @@ io.on('connection', (socket) => {
                 })
                 .catch(refundErr => {
                   console.error(`[Refund] FAILED for ${seat.userName} (${refundAmount} chips): ${refundErr.message}`);
-                  // Seat stays — player can reconnect and retry
+                  seat.stack = refundAmount; // give the chips back — player can retry
                 });
             } else {
               // No refund needed (0 stack or bot) — just clean up
