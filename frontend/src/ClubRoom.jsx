@@ -254,7 +254,15 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     const onConnect = () => {
       setIsConnected(true);
       socket.emit('rejoin_ring_game', { gameId: clubId }, (err) => {
-        if (err) addNotification('Failed to reconnect', 'error');
+        if (err) {
+          if (err.refunded) {
+            // Table was lost to a server restart — backend refunded the chips
+            addNotification(`Table closed — ${err.refunded.toLocaleString()} chips returned to your bankroll`, 'success');
+            onLeave();
+          } else {
+            addNotification('Failed to reconnect', 'error');
+          }
+        }
       });
     };
 

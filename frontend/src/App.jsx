@@ -121,7 +121,14 @@ export default function App() {
       }, (err, data) => {
         if (err) {
           console.log('[Reconnect] Session expired:', err.error);
-          setReconnectError(err.error || 'Session expired');
+          // If the table was lost to a server restart, the backend refunded
+          // any orphaned chips to the bankroll — tell the player what happened
+          // instead of leaving them confused about a "missing" buy-in.
+          setReconnectError(
+            err.refunded
+              ? `Your table closed. ${err.refunded.toLocaleString()} chips were returned to your bankroll.`
+              : (err.error || 'Session expired')
+          );
           clearSession();
           disconnect();
           setTimeout(() => {

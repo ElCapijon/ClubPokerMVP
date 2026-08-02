@@ -197,6 +197,19 @@ app.post('/api/games/leave', authenticateToken, async (req, res) => {
     }
 
     if (!foundGame || !foundSeat) {
+      // Not at any live in-memory table — likely the server restarted and the
+      // table's state is gone. Refund any orphaned DB session for this user so
+      // they never lose chips that were sitting on a dead table.
+      try {
+        const refunded = await recoverOrphanedSessions(userId);
+        if (refunded > 0) {
+          const bankroll = await getBankroll(userId);
+          notifyBankroll(userId, bankroll);
+          return res.json({ success: true, refundAmount: refunded, bankroll, recovered: true });
+        }
+      } catch (err) {
+        console.error('[Leave-HTTP] Recovery refund failed:', err.message);
+      }
       return res.status(404).json({ error: 'Not seated at any table' });
     }
 
@@ -550,6 +563,72 @@ function notifyBankroll(userId, bankroll) {
   const socketId = userIdToSocket.get(userId);
   if (socketId) {
     io.to(socketId).emit('bankroll_updated', { bankroll });
+  }
+}
+
+/**
+ * Refund any orphaned player sessions (left_at IS NULL) back to the player's
+ * bankroll and mark them as left. This is the crash/restart safety net:
+ * ring-game seats are in-memory only, so when the server restarts (deploy,
+ * crash, OOM) every seated stack vanishes. The player_sessions row is the
+ * only durable record that the chips existed, and without this recovery the
+ * buy-in would be lost forever.
+ *
+ * Idempotent: sessions already marked left_at are skipped, so it is safe to
+ * run at startup AND on-demand when a player tries to rejoin/leave a table
+ * that no longer exists in memory.
+ *
+ * @param {string|null} userId - If given, only that user's orphaned sessions are refunded.
+ * @returns {Promise<number>} total chips refunded
+ */
+async function recoverOrphanedSessions(userId = null) {
+  // Run the claim + refund + close in ONE transaction so recovery is
+  // exactly-once: concurrent runs (startup sweep vs. a player's rejoin/leave)
+  // serialize on the locked rows, and a crash mid-recovery rolls back instead
+  // of double-refunding or stranding chips.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Claim every still-open session for this user (or all users). FOR UPDATE
+    // locks the rows so a second concurrent recovery can't pick them up again.
+    const result = await client.query(
+      `SELECT ps.id, ps.user_id, ps.current_stack, u.display_name
+       FROM player_sessions ps
+       JOIN users u ON u.id = ps.user_id
+       WHERE ps.left_at IS NULL
+         AND ($1::uuid IS NULL OR ps.user_id = $1)
+       FOR UPDATE OF ps`,
+      [userId]
+    );
+
+    let totalRefunded = 0;
+    for (const row of result.rows) {
+      const amount = parseInt(row.current_stack) || 0;
+      if (amount > 0) {
+        // Refund inside the same transaction so a failure rolls everything back
+        await client.query(
+          'UPDATE users SET bankroll = bankroll + $1 WHERE id = $2',
+          [amount, row.user_id]
+        );
+        totalRefunded += amount;
+        console.log(`[Recovery] Refunded ${amount} chips to ${row.display_name} (orphaned session ${row.id})`);
+      }
+      // Close the session in the same transaction as the refund
+      await client.query('UPDATE player_sessions SET left_at = NOW() WHERE id = $1', [row.id]);
+    }
+
+    await client.query('COMMIT');
+    if (result.rows.length > 0) {
+      console.log(`[Recovery] Recovered ${result.rows.length} orphaned session(s), ${totalRefunded} chips refunded`);
+    }
+    return totalRefunded;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[Recovery] Failed to recover orphaned sessions:', err.message);
+    return 0;
+  } finally {
+    client.release();
   }
 }
 
@@ -1200,6 +1279,23 @@ function removeBustedBots(gameId) {
 function handleHandComplete(gameId, hand) {
   trackHandComplete(hand);
 
+  // Persist each player's current stack into their player_sessions row so
+  // that recoverOrphanedSessions() can refund the ACTUAL stack (not just the
+  // buy-in) if the server restarts mid-game. The hand players' stacks are
+  // authoritative after goToShowdown has awarded winnings.
+  const gForStack = ringGames.get(gameId);
+  if (gForStack) {
+    for (const hp of hand.players) {
+      const seat = gForStack.seats[hp.seatIndex];
+      if (seat && seat.sessionId && hp.userId && !hp.userId.startsWith('bot_')) {
+        pool.query(
+          'UPDATE player_sessions SET current_stack = $1 WHERE id = $2',
+          [hp.stack, seat.sessionId]
+        ).catch(err => console.error('[DB] Error persisting session stack:', err.message));
+      }
+    }
+  }
+
   // Persist hand history. Done here so every completion path records it —
   // human action, bot action, auto-fold, disconnect fold and all-in runouts.
   try {
@@ -1456,15 +1552,47 @@ io.on('connection', (socket) => {
   // ---------- LEAVE RING GAME (Cash Out) ----------
   socket.on('leave_ring_game', async ({ gameId }, callback) => {
     try {
-      const playerInfo = socketToPlayer.get(socket.id);
+      const userId = socket.userId;
+
+      // The socket→seat mapping can be lost after a reconnect blip (new
+      // socket id not yet re-registered by rejoin). Fall back to finding the
+      // seat by userId so cash-out still works instead of erroring out.
+      let playerInfo = socketToPlayer.get(socket.id);
       if (!playerInfo || playerInfo.gameId !== gameId) {
-        return callback && callback({ error: 'Not at this table' });
+        const gameByUser = ringGames.get(gameId);
+        if (gameByUser) {
+          const seatIdx = gameByUser.seats.findIndex(s => s && s.userId === userId);
+          if (seatIdx !== -1) {
+            playerInfo = { gameId, userId, seatIndex: seatIdx };
+            socketToPlayer.set(socket.id, playerInfo);
+          }
+        }
       }
 
       const game = ringGames.get(gameId);
       if (!game) {
         socketToPlayer.delete(socket.id);
+        // Server restarted and the in-memory table is gone. Refund any orphaned
+        // DB session for this player so they never lose their buy-in.
+        try {
+          const refunded = await recoverOrphanedSessions(userId);
+          if (refunded > 0) {
+            const bankroll = await getBankroll(userId);
+            notifyBankroll(userId, bankroll);
+            return callback && callback({
+              error: 'Table closed — chips returned to your bankroll',
+              refunded,
+              bankroll,
+            });
+          }
+        } catch (err) {
+          console.error('[Leave] Recovery refund failed:', err.message);
+        }
         return callback && callback({ error: 'Table not found' });
+      }
+
+      if (!playerInfo || playerInfo.seatIndex < 0 || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
       }
 
       const seat = game.seats[playerInfo.seatIndex];
@@ -1785,9 +1913,24 @@ io.on('connection', (socket) => {
   });
 
   // ---------- REJOIN RING GAME ----------
-  socket.on('rejoin_ring_game', ({ gameId }, callback) => {
+  socket.on('rejoin_ring_game', async ({ gameId }, callback) => {
     const game = ringGames.get(gameId);
-    if (!game) return callback && callback({ error: 'Table not found' });
+    if (!game) {
+      // Server restarted and the table's in-memory state is gone. Refund the
+      // player's orphaned session so they don't lose their buy-in, then report
+      // the table is gone so the client can return them to the lobby.
+      try {
+        const refunded = await recoverOrphanedSessions(socket.userId);
+        if (refunded > 0) {
+          const bankroll = await getBankroll(socket.userId);
+          notifyBankroll(socket.userId, bankroll);
+          return callback && callback({ error: 'Table not found', refunded, bankroll });
+        }
+      } catch (err) {
+        console.error('[Rejoin] Recovery refund failed:', err.message);
+      }
+      return callback && callback({ error: 'Table not found' });
+    }
 
     const userId = socket.userId;
 
@@ -2097,6 +2240,21 @@ ChallengeTracker.init(io, userIdToSocket).catch(err => {
 });
 
 HandStats.init();
+
+// ============================================================
+// Crash Recovery — refund orphaned sessions from a previous run
+// ============================================================
+// Ring-game seats are in-memory only, so after a server restart (deploy,
+// crash, OOM) every seated stack would be lost. player_sessions rows with
+// left_at IS NULL are the only record that the chips existed — refund them to
+// their owners' bankrolls on boot so nobody loses their buy-in to a restart.
+recoverOrphanedSessions()
+  .then(total => {
+    if (total > 0) {
+      console.log(`[Startup] Refunded ${total} chips from orphaned player sessions`);
+    }
+  })
+  .catch(err => console.error('[Startup] Orphaned session recovery failed:', err.message));
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
