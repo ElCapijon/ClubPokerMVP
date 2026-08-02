@@ -45,7 +45,7 @@ function emptyStats() {
 }
 
 function isHumanUserId(userId) {
-  return userId && !String(userId).startsWith('bot_');
+  return !!userId;
 }
 
 // ─── Initialization ───────────────────────────────────────
@@ -68,7 +68,7 @@ function shutdown() {
 // ─── Core Tracking ────────────────────────────────────────
 
 /**
- * Increment a numeric stat for a user. Ignores bots.
+ * Increment a numeric stat for a user.
  * @param {string} userId
  * @param {string} field - DB column name, e.g. 'hands_played'
  * @param {number} [amount=1]

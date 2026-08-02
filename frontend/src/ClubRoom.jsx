@@ -1185,31 +1185,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     </button>
                   )}
 
-                  {/* ── Host: Add / Remove Bots ── */}
-                  {isHost && (
-                    <div className="flex items-center gap-1.5">
-                      <button onClick={() => {
-                        getSocket().emit('add_bots', { gameId: clubId }, (err, data) => {
-                          if (err) addNotification(err.error || 'Failed to add bots', 'error');
-                          else addNotification(`🤖 Added ${data.botsAdded} bot(s)!`, 'success');
-                        });
-                      }}
-                        className="px-3 py-1.5 bg-gradient-to-r from-purple-700 to-purple-600 text-white rounded-xl text-[10px] font-semibold
-                                   hover:from-purple-600 hover:to-purple-500 transition-all active:scale-95">
-                        + Bots
-                      </button>
-                      <button onClick={() => {
-                        getSocket().emit('remove_bots', { gameId: clubId }, (err, data) => {
-                          if (err) addNotification(err.error || 'Failed to remove bots', 'error');
-                          else addNotification(`🧹 Removed ${data.botsRemoved} bot(s)`, 'success');
-                        });
-                      }}
-                        className="px-3 py-1.5 bg-gray-700 text-gray-300 rounded-xl text-[10px] font-semibold
-                                   hover:bg-gray-600 transition-all active:scale-95">
-                        - Bots
-                      </button>
-                    </div>
-                  )}
                 </>
               )}
 

@@ -17,9 +17,8 @@
    - [4.3 Hand Evaluator (HandEvaluator.js)](#43-hand-evaluator-handevaluatorjs)
    - [4.4 Pot Splitter (PotSplitter.js)](#44-pot-splitter-potsplitterjs)
    - [4.5 Deck (Deck.js)](#45-deck-deckjs)
-   - [4.6 Bot Player AI (botPlayer.js)](#46-bot-player-ai-botplayerjs)
-   - [4.7 Invite Code Generator (InviteCode.js)](#47-invite-code-generator-invitecodejs)
-   - [4.8 Database (db.js & migrate.js)](#48-database-dbjs--migratejs)
+   - [4.6 Invite Code Generator (InviteCode.js)](#46-invite-code-generator-invitecodejs)
+   - [4.7 Database (db.js & migrate.js)](#47-database-dbjs--migratejs)
 5. [Frontend Architecture](#5-frontend-architecture)
    - [5.1 Application Entry (App.jsx)](#51-application-entry-appjsx)
    - [5.2 Lobby (Lobby.jsx)](#52-lobby-lobbyjsx)
@@ -42,7 +41,6 @@ Club Poker MVP is a real-time, 6-max Texas Hold'em poker application designed fo
 - ✅ Server is authoritative (all game math on the backend)
 - ✅ Real-time via WebSockets (Socket.io)
 - ✅ Mobile-first responsive UI
-- ❌ No AI bots (just simple test bots)
 - ❌ No real-money transactions
 
 ---
@@ -53,7 +51,6 @@ Club Poker MVP is a real-time, 6-max Texas Hold'em poker application designed fo
 club-poker-mvp/
 ├── backend/                        # Node.js + Express + Socket.io server
 │   ├── __tests__/                  # Jest test suites
-│   │   ├── BotPlayer.test.js
 │   │   ├── Deck.test.js
 │   │   ├── GameHand.test.js
 │   │   ├── HandEvaluator.test.js
@@ -62,7 +59,6 @@ club-poker-mvp/
 │   │   ├── Phase6Reconnection.test.js
 │   │   └── PotSplitter.test.js
 │   ├── .env                        # Environment variables (DATABASE_URL)
-│   ├── botPlayer.js                # Simple bot AI
 │   ├── db.js                       # PostgreSQL connection pool
 │   ├── Deck.js                     # Card deck builder & shuffler
 │   ├── GameHand.js                 # Single hand lifecycle & state machine
@@ -141,7 +137,7 @@ The main server file is a single large module (~600 lines) that handles:
   inviteCode: "A7X9B2",
   hostId: "user-uuid",
   seats: [
-    { userId, userName, stack: 1500, isReady, isConnected, isSittingOut, isBot? },
+    { userId, userName, stack: 1500, isReady, isConnected, isSittingOut },
     null,  // empty seat
     // ... up to 6 seats
   ],
@@ -163,8 +159,6 @@ The main server file is a single large module (~600 lines) that handles:
 | `player_ready` | Toggle ready status, check for auto-start |
 | `rejoin_club` | Reconnect player to existing club & game |
 | `player_rebuy` | Reset busted player's stack |
-| `add_bots` | Fill empty seats with bot players (host only) |
-| `remove_bots` | Clear bot seats (host only) |
 | `player_sit_out` | Toggle sitting out status |
 | `send_emoji` | Broadcast emoji to room |
 | `disconnect` | Mark disconnected, set 60s auto-fold timeout |
@@ -174,7 +168,7 @@ The main server file is a single large module (~600 lines) that handles:
 - **`broadcastGameState(clubId)`**: Sends public game state to all players plus private hole cards to each individual player via `your_hole_cards` event. This is the primary state sync mechanism.
 - **`setActionTimer(clubId)`**: Sets a timer for the current player. If it's a bot, processes their action after 0.8-2s. If it's a human, auto-folds after the configured timer (default 20s).
 - **`scheduleRunout(clubId, hand)`**: Deals out the remaining streets of an all-in runout one at a time (~1.8s apart), broadcasting each intermediate board (flop → turn → river → showdown) so players see the cards run out instead of all five appearing at once. Timers are tracked in `runoutTimers` and cancelled if the hand/table goes away.
-- **`checkAutoStart(clubId)`**: Automatically starts the game when all seated players are ready (called after `player_ready`, `add_bots`, or when seats fill).
+- **`checkAutoStart(clubId)`**: Automatically starts the game when all seated players are ready (called after `player_ready` or when seats fill).
 - **`recordAction(clubId, seatIndex, action, amount)`**: Records and broadcasts the last action for UI display.
 
 **Hand Completion Flow:**
@@ -318,29 +312,7 @@ Standard 52-card deck utilities.
 
 ---
 
-### 4.6 Bot Player AI (`botPlayer.js`)
-
-Simple bots for testing the game flow. Bots make decisions based on hand strength and pot odds.
-
-**Bot Names:** Rotates through a pool of 5 names: Alice, Bob, Charlie, Diana, Evan (prefixed with 🤖).
-
-**Hand Strength Heuristic:**
-- Pre-flop: evaluates pocket pairs, high cards, suitedness, gaps
-- Post-flop: uses the actual `evaluateHand` function, normalized to 0-1
-- Random factor (±0.1) adds variety
-
-**Decision Logic:**
-- If no bet to call: check (weak) or bet ½-¾ pot (strong)
-- If there's a bet: compare hand strength to pot odds
-- Very strong hands (strength > 0.85): sometimes raise
-- Very weak hands (strength < 0.2): fold
-- Borderline: call small bets, fold big ones (with some randomness)
-
-**Important:** These are not genuine AI opponents — they're test tools to fill seats and advance the game flow.
-
----
-
-### 4.7 Invite Code Generator (`InviteCode.js`)
+### 4.6 Invite Code Generator (`InviteCode.js`)
 
 Generates a **6-character alphanumeric code** using `crypto.randomBytes`.
 
@@ -350,7 +322,7 @@ Codes are checked for uniqueness against in-memory clubs and the database before
 
 ---
 
-### 4.8 Database (`db.js` & `migrate.js`)
+### 4.7 Database (`db.js` & `migrate.js`)
 
 **Connection:** `db.js` creates a PostgreSQL `Pool` using `DATABASE_URL` from environment variables. Uses Neon (serverless PostgreSQL).
 
@@ -631,8 +603,6 @@ Built on **Tailwind CSS** with custom component classes and animations.
 | `player_action` | `{ clubId, action, amount? }` | callback: `{ success }` or `{ error }` |
 | `player_ready` | `{ clubId }` | (none — broadcast follows) |
 | `player_rebuy` | `{ clubId }` | callback: `{ success }` or `{ error }` |
-| `add_bots` | `{ clubId }` | callback: `{ botsAdded }` or `{ error }` |
-| `remove_bots` | `{ clubId }` | callback: `{ botsRemoved }` or `{ error }` |
 | `player_sit_out` | `{ clubId }` | callback: `{ success }` or `{ error }` |
 | `send_emoji` | `{ clubId, emoji }` | (none — broadcast follows) |
 
@@ -735,7 +705,7 @@ Run the migration: `cd backend && npm run migrate`
 
 **Test Framework:** Jest 30
 
-**Test Suites (8 total, 135 tests):**
+**Test Suites (7 total, 138 tests):**
 
 | Suite | Tests | Coverage |
 |-------|-------|----------|
@@ -746,7 +716,6 @@ Run the migration: `cd backend && npm run migrate`
 | `Phase4Actions.test.js` | 20 | All-in scenarios, min raise, call/fold edges, full hand simulation |
 | `Phase5Showdown.test.js` | 7 | Rebuy system, side pot accuracy, full showdown |
 | `Phase6Reconnection.test.js` | 9 | Snapshot, public/private state, disconnect |
-| `BotPlayer.test.js` | 10 | Bot names, hand strength, decision making |
 
 **Run Tests:**
 ```bash
