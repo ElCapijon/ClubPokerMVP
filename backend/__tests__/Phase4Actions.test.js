@@ -144,6 +144,85 @@ describe('Phase 4 - Action Edge Cases', () => {
       // Nothing left to advance after the hand is complete
       expect(advanceCompleteRoundStep(hand)).toBe(false);
     });
+
+    test('lone live player vs two all-in opponents: board runs out, no betting round', () => {
+      const club = createClubState();
+      // Alice (1500) stays live; Bob and Charlie are short stacks that shove all-in
+      club.seats[1] = { userId: 'u2', userName: 'Bob', stack: 200, isConnected: true };
+      club.seats[2] = { userId: 'u3', userName: 'Charlie', stack: 200, isConnected: true };
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      const aliceSeat = hand.players[0].seatIndex;
+      const bobSeat = hand.players[1].seatIndex;
+      const charlieSeat = hand.players[2].seatIndex;
+
+      // Alice (UTG/dealer) calls the blind first
+      let r = handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      expect(r.error).toBeNull();
+
+      // Bob shoves all-in to 200
+      r = handleAction(hand, bobSeat, 'raise', 200);
+      expect(r.error).toBeNull();
+
+      // Charlie calls all-in (200)
+      r = handleAction(hand, charlieSeat, 'call');
+      expect(r.error).toBeNull();
+
+      // Alice calls 200 — she stays live with chips left
+      r = handleAction(hand, aliceSeat, 'call');
+      expect(r.error).toBeNull();
+
+      expect(hand.players[1].isAllIn).toBe(true);
+      expect(hand.players[2].isAllIn).toBe(true);
+      expect(hand.players[0].isAllIn).toBe(false);
+
+      // Round completes and the flop is dealt — but Alice is NOT offered a
+      // betting round: everyone else is all-in, so the board runs out.
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+      expect(isRoundComplete(hand)).toBe(true);
+
+      // Drive the staged runout to showdown — Alice never acts again
+      let guard = 0;
+      while (!isHandComplete(hand) && guard < 6) {
+        guard++;
+        advanceCompleteRoundStep(hand);
+      }
+      expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
+      expect(hand.communityCards.length).toBe(5);
+      expect(hand.handResult).toBeDefined();
+    });
+
+    test('heads-up vs all-in opponent: live player matches, then board runs out', () => {
+      const club = createClubState();
+      club.seats[2] = null; // heads-up: Alice (BB/dealer) vs Bob (SB)
+      club.seats[0] = { userId: 'u1', userName: 'Alice', stack: 3000, isConnected: true };
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      // SB shoves all-in
+      let r = handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'raise', 1500);
+      expect(r.error).toBeNull();
+
+      // BB (Alice) calls — matches, but still has chips left (3000 stack)
+      r = handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      expect(r.error).toBeNull();
+
+      expect(hand.players[1].isAllIn).toBe(true);
+      expect(hand.players[0].isAllIn).toBe(false);
+
+      // Flop dealt, round complete — the live BB is NOT asked to bet again
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+      expect(isRoundComplete(hand)).toBe(true);
+
+      let guard = 0;
+      while (!isHandComplete(hand) && guard < 6) {
+        guard++;
+        advanceCompleteRoundStep(hand);
+      }
+      expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
+      expect(hand.communityCards.length).toBe(5);
+    });
   });
 
   describe('Minimum raise validation', () => {

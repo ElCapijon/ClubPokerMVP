@@ -204,6 +204,18 @@ function isRoundComplete(hand) {
   // If all remaining players are all-in, round is complete
   if (nonAllIn.length === 0) return true;
 
+  // If exactly ONE player can still bet (everyone else is all-in), the round
+  // is complete once that player has matched the current bet — a bet/raise
+  // would have nobody to call it, so the board runs out instead of offering
+  // them betting options (standard poker: heads-up vs an all-in opponent
+  // deals the remaining streets out). The lone player still must respond to
+  // an unmatched current bet (call/fold) before the board can run out.
+  if (nonAllIn.length === 1) {
+    const lone = nonAllIn[0];
+    if (lone.roundBet < hand.currentBet && !lone.isAllIn) return false;
+    return true;
+  }
+
   // Check if all non-all-in players have acted and matched the bet
   for (const player of nonAllIn) {
     if (!player.hasActed) return false;

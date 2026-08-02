@@ -656,6 +656,20 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const isHost = players[mySeatIndex]?.isHost;
   const canAct = isMyTurn && !isMeFolded && !isMeAllIn;
 
+  // Betting requires a live opponent to bet against. If every other player
+  // is all-in (or folded), the board runs out instead of offering betting
+  // options — standard poker (heads-up vs an all-in opponent deals the rest
+  // of the board out). The lone live player still gets call/fold if they owe
+  // the current bet (e.g. an all-in raise they haven't matched yet).
+  const hasLiveOpponent = connectedPlayers.some(p =>
+    p && !p.isFolded && !p.isAllIn && p.seatIndex !== mySeatIndex
+  );
+  const oweCurrentBet = (currentBet || 0) > (myPlayerData?.roundBet || 0);
+  // Main action buttons (fold/check/call) — only when you can actually act.
+  const showMainActions = canAct && (hasLiveOpponent || oweCurrentBet);
+  // Bet sizing controls (raise/bet/all-in) — always need a live opponent.
+  const showBetting = canAct && (myPlayerData?.stack || 0) > 0 && hasLiveOpponent;
+
   // ─── Timer countdown ──────────────────────────────────────
   const [displayTimer, setDisplayTimer] = useState(0);
   useEffect(() => {
@@ -1194,7 +1208,9 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               {/* ===================== IN-GAME CONTROLS ===================== */}
               {gameState !== 'WAITING' && gameState !== 'SHOWDOWN' && gameState !== 'HAND_COMPLETE' && (
                 <>
-                  {/* ── Main action buttons ── */}
+                  {/* ── Main action buttons — hidden while the board is
+                       running out (no live opponent) or you are all-in/folded ── */}
+                  {showMainActions && (
                   <div className="flex items-center gap-1.5 sm:gap-2">
                     <button onClick={() => handleAction('fold')} disabled={!canAct}
                       className="action-btn-fold px-4 py-2 text-xs">
@@ -1213,9 +1229,10 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                       </button>
                     )}
                   </div>
+                  )}
 
-                  {/* ── Bet slider + presets ── */}
-                  {canAct && myStack > 0 && (
+                  {/* ── Bet slider + presets (only with a live opponent) ── */}
+                  {showBetting && (
                     <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-center bet-slider-container">
                       <div className="flex items-center gap-0.5 sm:gap-1">
                         <button onClick={() => handleAction(isRaiseContext ? 'raise' : 'bet', getBetPreset(0.5))}

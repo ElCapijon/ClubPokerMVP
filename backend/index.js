@@ -860,6 +860,17 @@ function setActionTimer(gameId) {
   const hand = game.currentHand;
   if (hand.gameStatus === GAME_STATES.SHOWDOWN || hand.gameStatus === GAME_STATES.HAND_COMPLETE) return;
 
+  // If the betting round is already complete with nobody left to act — e.g.
+  // every remaining opponent is all-in and the lone live player has matched,
+  // or the hand started with everyone all-in from short blinds — run out the
+  // board instead of arming a phantom action timer that would prompt the lone
+  // player to act (and auto-fold them).
+  if (isRoundComplete(hand)) {
+    game.gameState = hand.gameStatus;
+    scheduleRunout(gameId, hand);
+    return;
+  }
+
   const currentPlayer = hand.players[hand.currentPlayerIndex];
   if (!currentPlayer || currentPlayer.isAllIn || currentPlayer.isFolded) {
     // Defensive: nobody can act at the current index. If a betting round is
