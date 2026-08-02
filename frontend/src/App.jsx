@@ -297,10 +297,9 @@ export default function App() {
         {/* Logo */}
         <div className="text-center mb-6 animate-fade-in">
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-felt to-felt-dark border-2 border-poker-gold/30 shadow-xl shadow-felt/20 mb-4">
-            <svg className="w-10 h-10 text-poker-gold" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 3c1.8 2.5 4.5 4.2 4.5 7a4.5 4.5 0 01-9 0c0-2.8 2.7-4.5 4.5-7zM12 3c-3.2 2.6-5.5 5-7.3 8.3A4.5 4.5 0 0012 15.4 4.5 4.5 0 0019.3 11.3C17.5 8 15.2 5.6 12 3z" opacity="0.4"/>
-              <path d="M12 17.5h-6a1 1 0 00-1 1V20a1 1 0 001 1h6a1 1 0 001-1v-1.5a1 1 0 00-1-1z" opacity="0.6"/>
-            </svg>
+            <img src="/game-logo.svg" alt="Poker Club logo"
+              className="w-11 h-11"
+              style={{ filter: 'invert(82%) sepia(63%) saturate(1990%) hue-rotate(2deg) brightness(103%) contrast(94%)' }} />
           </div>
           <h1 className="text-4xl font-bold font-display text-white mb-2">
             Poker Club
