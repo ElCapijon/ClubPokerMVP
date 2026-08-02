@@ -1265,15 +1265,20 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                                    shadow-lg shadow-emerald-600/20">
                         Show Cards
                       </button>
-                      <button onClick={() => handleShowdownDecision(false)} disabled={!showdown.currentCanMuck}
-                        title={showdown.currentCanMuck
-                          ? 'Muck your hand — throw it away face down'
-                          : 'You hold the winning hand — your cards must be shown'}
-                        className="bg-gray-700 text-gray-300 font-bold rounded-xl px-4 py-2 text-xs
-                                   hover:bg-gray-600 transition-all active:scale-95
-                                   disabled:opacity-40 disabled:cursor-not-allowed">
-                        Muck
-                      </button>
+                      {showdown.currentCanMuck ? (
+                        <button onClick={() => handleShowdownDecision(false)}
+                          title="Muck your hand — throw it away face down"
+                          className="bg-gray-700 text-gray-300 font-bold rounded-xl px-4 py-2 text-xs
+                                     hover:bg-gray-600 transition-all active:scale-95">
+                          Muck
+                        </button>
+                      ) : (
+                        /* Pot winners never get a muck option — their cards
+                           must be shown. The winning hand always tables. */
+                        <span className="text-[10px] sm:text-xs text-emerald-400/90 font-semibold">
+                          Winning hand — must show
+                        </span>
+                      )}
                       {displayTimer > 0 && (
                         <span className="text-xs text-gray-500 font-mono">{displayTimer}s</span>
                       )}
