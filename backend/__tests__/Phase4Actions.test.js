@@ -476,6 +476,45 @@ describe('Phase 4 - Action Edge Cases', () => {
       expect(bb.isAllIn).toBe(true);
     });
 
+    test('short-stack BB posts less than the blind but currentBet stays the FULL big blind', () => {
+      const club = createClubState();
+      // Charlie (BB) only has 5 chips but the big blind is 20 — he posts 5 all-in
+      club.seats[2] = { userId: 'u3', userName: 'Charlie', stack: 5, isConnected: true };
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      const bb = hand.players[2];
+      expect(bb.stack).toBe(0);
+      expect(bb.isAllIn).toBe(true);
+      expect(bb.roundBet).toBe(5);
+
+      // The amount to call is the full big blind (20), NOT the 5 the short BB posted.
+      // The short blind only caps what the BB can win (side pot), never the bet level.
+      expect(hand.currentBet).toBe(20);
+
+      // First player to act (UTG/dealer) must call the full 20, not just 5
+      const utgIdx = hand.currentPlayerIndex;
+      const utgSeat = hand.players[utgIdx].seatIndex;
+      const r = handleAction(hand, utgSeat, 'call');
+      expect(r.error).toBeNull();
+      expect(hand.players[utgIdx].roundBet).toBe(20);
+
+      // SB also owes the difference up to the full blind: posted 10, must add 10 more
+      const sbIdx = hand.currentPlayerIndex;
+      const sbSeat = hand.players[sbIdx].seatIndex;
+      const r2 = handleAction(hand, sbSeat, 'call');
+      expect(r2.error).toBeNull();
+      // SB total committed = 10 (blind) + 10 (top-up) = 20 (roundBet resets per street,
+      // so assert the cumulative betAmount)
+      expect(hand.players[sbIdx].betAmount).toBe(20);
+
+      // Pot: SB 10 + BB 5 + UTG 20 + SB top-up 10 = 45
+      expect(hand.pot).toBe(45);
+      // Both live players matched the full 20 → preflop round completes → flop is dealt
+      expect(hand.gameStatus).toBe(GAME_STATES.FLOP);
+      expect(hand.communityCards.length).toBe(3);
+    });
+
     test('short-stack BB (all-in from blind) is never asked to act; streets auto-advance', () => {
       const club = createClubState();
       club.seats[0] = { userId: 'u1', userName: 'Alice', stack: 100, isConnected: true };

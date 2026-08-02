@@ -157,7 +157,12 @@ function startHand(hand) {
   if (bbPlayer.stack <= 0) bbPlayer.isAllIn = true; // Short-stack blind → all-in
 
   hand.pot = sbAmount + bbAmount;
-  hand.currentBet = bbAmount;
+  // The bet-to-call is the FULL big blind, even when the BB is all-in for less
+  // (short-stacked blind). An incomplete blind never lowers what the rest of the
+  // table must call — it only caps how much the short BB can win, and the
+  // difference forms a side pot at showdown. bbAmount is the actual chips posted;
+  // currentBet is the amount the remaining players must match.
+  hand.currentBet = hand.bigBlind;
   hand.minRaise = hand.bigBlind;
   hand.lastRaiserIndex = bbIndex;
 

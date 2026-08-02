@@ -223,6 +223,7 @@ WAITING → PREFLOP → FLOP → TURN → RIVER → SHOWDOWN → HAND_COMPLETE �
 - SB posts and `hasActed` is set to true (pre-flop only)
 - BB posts the blind but is **not** marked `hasActed` — this preserves the BB's pre-flop "option": when action returns to them after everyone calls, they get a turn to check or raise instead of the round ending early
 - If a blind empties a player's stack (short stack ≤ blind), they are **marked all-in immediately** — otherwise a 0-chip "all-in" player would be treated as a live actor, blocking street auto-advance and getting prompted to check/raise (or folded by a bot)
+- The bet-to-call (`currentBet`) is always the **full big blind**, even when the BB is all-in for less (short-stacked blind). The short blind only caps what the BB can win (the difference forms a side pot at showdown) — it never lowers what the remaining players must call
 - First to act pre-flop = player left of BB (UTG)
 - First to act post-flop = first active player left of dealer
 
