@@ -372,26 +372,6 @@
   animation: pulseTurn 1.5s ease-in-out infinite;
 }
 
-/* Emoji float animation */
-@keyframes emojiFloat {
-  0% {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0) scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: translateX(-30%) translateY(-20px) scale(1.1);
-  }
-  100% {
-    opacity: 0;
-    transform: translateX(-10%) translateY(-40px) scale(0.8);
-  }
-}
-
-.animate-emoji-float {
-  animation: emojiFloat 2s ease-out forwards;
-}
-
 /* Pulse (generic) */
 @keyframes pulse {
   0%, 100% { opacity: 1; }

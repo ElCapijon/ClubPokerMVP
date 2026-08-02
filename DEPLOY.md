@@ -1,4 +1,4 @@
-# 🃏 Poker Club — Deployment Guide
+# Poker Club — Deployment Guide
 
 ## Architecture
 
@@ -64,7 +64,7 @@ Render will:
 2. Build the frontend (`npm run build`)
 3. Start the server (`npm start`)
 
-After ~2-3 minutes, you'll see: `"🃏 Poker Club Server running on port 10000"`
+After ~2-3 minutes, you'll see: `"[Server] Poker Club running on port 10000"`
 
 ### Step 4: Run the database migration
 
@@ -78,7 +78,7 @@ cd backend && node migrate.js
 DATABASE_URL="your-neon-connection-string" node backend/migrate.js
 ```
 
-### Step 5: Access your app 🎉
+### Step 5: Access your app
 
 Your app will be live at: `https://poker-club.onrender.com` (or whatever name you chose)
 

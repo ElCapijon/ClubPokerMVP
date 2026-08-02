@@ -6,9 +6,6 @@ const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'h
 
 const MAX_SEATS = 6;
 
-// Preset emojis for the chat tray
-const PRESET_EMOJIS = ['😎', '🤡', '😱', '🔥', '💪', '🃏', '🍀', '😤'];
-
 // Seat positions for the oval table layout (clockwise from bottom-center)
 // Pushed up slightly to leave room for big hole cards + community cards below
 const SEAT_POSITIONS = [
@@ -134,20 +131,6 @@ function Card({ card, faceDown, size, dealDelay }) {
   );
 }
 
-// ─── Emoji Bubble ────────────────────────────────────────────
-function EmojiBubble({ emoji, userName }) {
-  return (
-    <div className="absolute z-50 animate-emoji-float pointer-events-none"
-      style={{ bottom: '100%', left: '50%', transform: 'translateX(-50%)' }}
-    >
-      <div className="bg-black/60 backdrop-blur-sm rounded-full px-2 py-1 flex items-center gap-1 shadow-lg whitespace-nowrap">
-        <span className="text-lg">{emoji}</span>
-        <span className="text-[10px] text-white/70">{userName}</span>
-      </div>
-    </div>
-  );
-}
-
 // ====================================================================
 // MAIN COMPONENT
 // ====================================================================
@@ -177,17 +160,10 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const [actionTimeRemaining, setActionTimeRemaining] = useState(0);
   const [actionTimerTotal, setActionTimerTotal] = useState(20);
 
-  // Emoji state
-  const [emojiTrayOpen, setEmojiTrayOpen] = useState(false);
-  const [floatingEmojis, setFloatingEmojis] = useState([]);
-
   // Bet slider
   const [betSliderValue, setBetSliderValue] = useState(0);
 
 
-
-  const emojiTrayRef = useRef(null);
-  const emojiIdCounter = useRef(0);
 
   // Chip flight animation state
   const [chipFlights, setChipFlights] = useState([]);
@@ -234,17 +210,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     // guard so blind posts on this hand can animate normally.
     mountedMidGameRef.current = false;
   }, [handCount]);
-
-  // Close emoji tray on outside click
-  useEffect(() => {
-    function handleClick(e) {
-      if (emojiTrayRef.current && !emojiTrayRef.current.contains(e.target)) {
-        setEmojiTrayOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
 
   // ─── Socket handlers ──────────────────────────────────────
   useEffect(() => {
@@ -411,7 +376,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               winnerTotals[winner.seatIndex] = (winnerTotals[winner.seatIndex] || 0) + (winner.amountWon || 0);
             }
             const winnerName = data.players?.find(p => p.seatIndex === winner.seatIndex)?.userName || 'Player';
-            addNotification(`🏆 ${winnerName} wins $${winner.amountWon}!`, 'success');
+            addNotification(`${winnerName} wins $${winner.amountWon}!`, 'success');
           }
         }
 
@@ -461,12 +426,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       setLastAction(data);
     };
 
-    const onEmojiReceived = (data) => {
-      const id = ++emojiIdCounter.current;
-      setFloatingEmojis(prev => [...prev, { ...data, id }]);
-      setTimeout(() => setFloatingEmojis(prev => prev.filter(e => e.id !== id)), 2500);
-    };
-
     const onConnectError = () => setIsConnected(false);
 
     socket.on('connect', onConnect);
@@ -479,7 +438,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     socket.on('full_state_snapshot', onFullStateSnapshot);
     socket.on('hand_complete', onHandComplete);
     socket.on('last_action', onLastAction);
-    socket.on('emoji_received', onEmojiReceived);
     socket.on('connect_error', onConnectError);
 
     if (socket.connected) {
@@ -498,7 +456,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       socket.off('full_state_snapshot', onFullStateSnapshot);
       socket.off('hand_complete', onHandComplete);
       socket.off('last_action', onLastAction);
-      socket.off('emoji_received', onEmojiReceived);
       socket.off('connect_error', onConnectError);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -589,11 +546,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     });
   }, [clubId, addNotification]);
 
-  const handleSendEmoji = useCallback((emoji) => {
-    getSocket().emit('send_emoji', { gameId: clubId, emoji });
-    setEmojiTrayOpen(false);
-  }, [clubId]);
-
   const handleRebuy = useCallback(() => {
     const buyin = Math.max(50, clubData?.minBuyin || 50);
     getSocket().emit('player_rebuy', { gameId: clubId, buyinAmount: buyin }, (err) => {
@@ -611,7 +563,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         addNotification(err.error || 'Failed to cash out', 'error');
         return;
       }
-      addNotification(`💰 Cashed out ${data.cashOutAmount} chips!`, 'success');
+      addNotification(`Cashed out ${data.cashOutAmount} chips!`, 'success');
       // Navigate back to lobby
       setTimeout(() => onLeave(), 1500);
     });
@@ -759,7 +711,10 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
           <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 w-full max-w-xs animate-slide-up shadow-2xl">
             <div className="text-center">
               <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-emerald-500/20 mb-3">
-                <span className="text-2xl">💰</span>
+                <svg className="w-7 h-7 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <circle cx="12" cy="12" r="9" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 7v10M9.5 9.5h3.5a1.5 1.5 0 010 3h-2a1.5 1.5 0 000 3h3.5" />
+                </svg>
               </div>
               <h3 className="text-lg font-bold text-white mb-1">Cash Out?</h3>
               <p className="text-sm text-gray-400 mb-1">
@@ -791,7 +746,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         <div className="fixed inset-0 z-40 pointer-events-none flex items-center justify-center"
           style={{ animation: 'fadeIn 0.3s ease-out' }}>
           <div className="bg-gray-900/85 backdrop-blur-md rounded-2xl border border-poker-gold/30 p-4 sm:p-6 max-w-sm mx-4 text-center shadow-2xl animate-slide-up">
-            <h3 className="text-base sm:text-lg font-bold text-poker-gold mb-3">🃏 Hand Complete</h3>
+            <h3 className="text-base sm:text-lg font-bold text-poker-gold mb-3">Hand Complete</h3>
             <div className="space-y-2">
               {handResult.handResult.map((pot, i) => (
                 <div key={i} className="text-sm">
@@ -840,7 +795,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
             <button onClick={() => setShowCashOut(true)}
               className="px-2 sm:px-3 py-1 sm:py-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-lg text-[10px] sm:text-xs font-bold
                          hover:from-emerald-500 hover:to-emerald-400 transition-all active:scale-95 shadow-lg shadow-emerald-600/20">
-              💰 Cash Out
+              Cash Out
             </button>
           )}
           <button onClick={onLogout}
@@ -889,7 +844,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               {pot > 0 && (
                 <div key={pot} className="bg-black/50 rounded-full px-4 sm:px-6 py-1.5 sm:py-2 backdrop-blur-sm z-10 animate-pot-grow">
                   <span className="text-sm sm:text-base font-bold text-poker-gold flex items-center gap-2">
-                    <span className="text-yellow-400/60 text-xs">💰</span>
                     Pot: ${pot.toLocaleString()}
                   </span>
                 </div>
@@ -970,11 +924,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                   <div className="absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-500"
                     style={{ top: `${pos.top}%`, left: `${pos.left}%` }}
                   >
-                  {/* Floating emojis */}
-                  {floatingEmojis.filter(e => e.seatIndex === index).map(e => (
-                    <EmojiBubble key={e.id} emoji={e.emoji} userName={e.userName} />
-                  ))}
-
                   <div className={`
                     flex flex-col items-center gap-0.5
                     ${!player.isConnected ? 'opacity-50' : ''}
@@ -1148,7 +1097,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     className="px-4 py-2 bg-gradient-to-r from-poker-gold to-yellow-500 text-black font-bold rounded-xl
                                hover:from-yellow-400 hover:to-yellow-300 transition-all duration-200 active:scale-95
                                shadow-lg shadow-yellow-600/20 text-xs">
-                    💰 Rebuy (${clubData?.minBuyin || 50} chips)
+                    Rebuy (${clubData?.minBuyin || 50} chips)
                   </button>
                   <button onClick={handleSitOutToggle}
                     className={`px-4 py-2 rounded-xl font-semibold text-xs transition-all duration-200 active:scale-95 ${
@@ -1269,31 +1218,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                 </>
               )}
 
-              {/* ── Emoji + Share (always available) ── */}
-              <div className="flex items-center gap-1 sm:gap-1.5">
-                <div className="relative" ref={emojiTrayRef}>
-                  <button onClick={() => setEmojiTrayOpen(!emojiTrayOpen)}
-                    className="px-3 py-2 rounded-xl text-xs transition-all bg-gray-800 text-gray-300 hover:bg-gray-700 active:scale-95">
-                    😊
-                  </button>
-                  {emojiTrayOpen && (
-                    <div className="absolute bottom-full left-0 mb-2 bg-gray-800 rounded-xl border border-gray-700 shadow-2xl p-2 animate-slide-up z-50">
-                      <div className="flex gap-1.5">
-                        {PRESET_EMOJIS.map((emoji, i) => (
-                          <button key={i} onClick={() => handleSendEmoji(emoji)}
-                            className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center text-base sm:text-lg rounded-lg hover:bg-gray-700 transition-colors active:scale-90">
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <button onClick={() => handleSendEmoji('🃏')}
-                  className="px-3 py-2 rounded-xl text-xs font-medium transition-all bg-gray-800 text-gray-300 hover:bg-gray-700">
-                  🀄
-                </button>
-              </div>
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-# 🃏 Club Poker MVP — Architecture & Codebase Guide
+# Club Poker MVP — Architecture & Codebase Guide
 
 > **Version:** 1.0.0  
 > **Deployed at:** [https://clubpokermvp.onrender.com](https://clubpokermvp.onrender.com)  
@@ -38,10 +38,10 @@
 Club Poker MVP is a real-time, 6-max Texas Hold'em poker application designed for private play among friends. The server is authoritative — all game logic runs server-side, and clients are "dumb terminals" that display state and send actions.
 
 **Core Principles:**
-- ✅ Server is authoritative (all game math on the backend)
-- ✅ Real-time via WebSockets (Socket.io)
-- ✅ Mobile-first responsive UI
-- ❌ No real-money transactions
+- Server is authoritative (all game math on the backend)
+- Real-time via WebSockets (Socket.io)
+- Mobile-first responsive UI
+- No real-money transactions
 
 ---
 
@@ -160,7 +160,6 @@ The main server file is a single large module (~600 lines) that handles:
 | `rejoin_club` | Reconnect player to existing club & game |
 | `player_rebuy` | Reset busted player's stack |
 | `player_sit_out` | Toggle sitting out status |
-| `send_emoji` | Broadcast emoji to room |
 | `disconnect` | Mark disconnected, set 60s auto-fold timeout |
 
 **Key Functions:**
@@ -355,7 +354,7 @@ The root component manages view routing and session persistence.
 
 **Reconnection Flow:**
 1. Load session from localStorage
-2. Show "Reconnecting..." screen with spinning card emoji
+2. Show "Reconnecting..." screen with a spinning spinner
 3. Call `socket.emit('rejoin_club', ...)` with saved clubId/userId
 4. On success → transition to ClubRoom
 5. On failure → show "Session Expired" with "Back to Lobby" button
@@ -410,7 +409,6 @@ The main game interface (~600 lines of React). This is the most complex componen
 | | `handResult` | Showdown results overlay |
 | Action | `lastAction` | Last action text display |
 | | `actionTimeRemaining`, `actionTimerTotal` | Turn timer |
-| UI | `emojiTrayOpen`, `floatingEmojis` | Emoji chat |
 | | `betSliderValue` | Bet sizing slider |
 | | `notifications` | Toast notifications |
 
@@ -419,7 +417,6 @@ The main game interface (~600 lines of React). This is the most complex componen
 | Component | Purpose |
 |-----------|---------|
 | `Card` | Renders a playing card (face-up or face-down). Supports 4 sizes (xl=64×90, lg=50×72, md=40×56, sm=32×46). Includes deal animation with staggered delay. |
-| `EmojiBubble` | Floating emoji that appears above a player's seat and fades out over 2.5s. |
 
 **Table Layout:**
 - Container: `max-w-[800px]` with `aspect-[4/3]`
@@ -462,8 +459,6 @@ Seat 1 (68%, 10%)     Seat 5 (68%, 90%)
 - Sit Out / Back In
 - Rebuy (when busted)
 - Start Game (host only)
-- 🤖 Fill Bots (host only)
-- Remove Bots (host only)
 
 **Socket Handlers (inside useEffect):**
 
@@ -475,7 +470,6 @@ Seat 1 (68%, 10%)     Seat 5 (68%, 90%)
 | `full_state_snapshot` | Full state on reconnection |
 | `hand_complete` | Show showdown results, reveal all hole cards, clear last action |
 | `last_action` | Display last action text |
-| `emoji_received` | Spawn floating emoji above player's seat |
 
 **Bet Sizing Logic:**
 ```
@@ -539,7 +533,6 @@ Built on **Tailwind CSS** with custom component classes and animations.
 | `cardDealt` | 0.35s | Cards sliding in with rotation |
 | `cardBackDeal` | 0.25s | Face-down cards appearing |
 | `chipStack` | 0.4s | Pot/badge appearing with bounce |
-| `emojiFloat` | 2.0s | Emoji floating up and fading |
 | `bounceSubtle` | 2.0s | Dealer button bouncing |
 | `pulseTurn` | 1.5s | Active player glow pulsing |
 | `slideUp / slideDown` | 0.3s | Panels and notifications |
@@ -604,7 +597,6 @@ Built on **Tailwind CSS** with custom component classes and animations.
 | `player_ready` | `{ clubId }` | (none — broadcast follows) |
 | `player_rebuy` | `{ clubId }` | callback: `{ success }` or `{ error }` |
 | `player_sit_out` | `{ clubId }` | callback: `{ success }` or `{ error }` |
-| `send_emoji` | `{ clubId, emoji }` | (none — broadcast follows) |
 
 ### Server → Client
 
@@ -616,7 +608,6 @@ Built on **Tailwind CSS** with custom component classes and animations.
 | `full_state_snapshot` | game_state_sync + holeCards | On reconnection only |
 | `hand_complete` | `{ handResult, communityCards, players[] (with holeCards, stacks) }` | When a hand ends |
 | `last_action` | `{ seatIndex, userName, action, amount, timestamp }` | After every player action |
-| `emoji_received` | `{ seatIndex, userName, emoji, timestamp }` | When any player sends an emoji |
 | `connect_error` | (error) | On socket connection failure |
 
 ---

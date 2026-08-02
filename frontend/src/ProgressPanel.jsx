@@ -102,7 +102,7 @@ function fmtSigned(n) {
 
 // ─── Progression Table ──────────────────────────────────────
 // A clean row in the all-time totals table.
-function StatRow({ icon, label, value, accent, sub }) {
+function StatRow({ label, value, accent, sub }) {
   const color =
     accent === 'green' ? 'text-green-400' :
     accent === 'red' ? 'text-red-400' :
@@ -110,12 +110,20 @@ function StatRow({ icon, label, value, accent, sub }) {
     accent === 'blue' ? 'text-blue-400' :
     accent === 'purple' ? 'text-purple-400' :
     'text-white';
+  // Small colored indicator dot (replaces emoji icons)
+  const dotColor =
+    accent === 'green' ? 'bg-green-400' :
+    accent === 'red' ? 'bg-red-400' :
+    accent === 'gold' ? 'bg-poker-gold' :
+    accent === 'blue' ? 'bg-blue-400' :
+    accent === 'purple' ? 'bg-purple-400' :
+    'bg-gray-500';
 
   return (
     <div className="flex items-center justify-between px-3 py-2 bg-gray-800/30 border border-gray-800/60 rounded-lg
                     hover:bg-gray-800/60 transition-colors duration-200">
       <div className="flex items-center gap-2.5 min-w-0">
-        <span className="text-sm shrink-0">{icon}</span>
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
         <div className="min-w-0">
           <p className="text-[10px] text-gray-400 uppercase tracking-wider truncate">{label}</p>
           {sub && <p className="text-[9px] text-gray-600 leading-none mt-0.5 truncate">{sub}</p>}
@@ -167,32 +175,32 @@ function ProgressionTable({ s }) {
       </div>
 
       {/* Hands */}
-      <SectionLabel>🎮 Hands</SectionLabel>
-      <StatRow icon="🃏" label="Hands Played" value={fmtChips(handsPlayed)} accent="blue" />
-      <StatRow icon="🏆" label="Hands Won" value={fmtChips(handsWon)} accent="gold" sub={`${winRate}% win rate`} />
-      <StatRow icon="🌸" label="Flops Seen" value={fmtChips(s.flopsSeen)} accent="blue" sub={handsPlayed > 0 ? `${Math.round(((s.flopsSeen || 0) / handsPlayed) * 100)}% of hands` : undefined} />
+      <SectionLabel>Hands</SectionLabel>
+      <StatRow label="Hands Played" value={fmtChips(handsPlayed)} accent="blue" />
+      <StatRow label="Hands Won" value={fmtChips(handsWon)} accent="gold" sub={`${winRate}% win rate`} />
+      <StatRow label="Flops Seen" value={fmtChips(s.flopsSeen)} accent="blue" sub={handsPlayed > 0 ? `${Math.round(((s.flopsSeen || 0) / handsPlayed) * 100)}% of hands` : undefined} />
 
       {/* Actions — the big progression table */}
-      <SectionLabel>🎯 Actions</SectionLabel>
-      <StatRow icon="🙈" label="Folded" value={fmtChips(s.folds)} />
-      <StatRow icon="📞" label="Called" value={fmtChips(s.calls)} />
-      <StatRow icon="📈" label="Raised" value={fmtChips(s.raises)} />
-      <StatRow icon="🤝" label="Checked" value={fmtChips(s.checks)} />
-      <StatRow icon="🔥" label="All-Ins" value={fmtChips(s.allIns)} accent="red" />
-      <StatRow icon="🎚️" label="Voluntary Put In Pot" value={`${vpip}%`} accent="purple" sub="calls + raises per hand" />
+      <SectionLabel>Actions</SectionLabel>
+      <StatRow label="Folded" value={fmtChips(s.folds)} />
+      <StatRow label="Called" value={fmtChips(s.calls)} />
+      <StatRow label="Raised" value={fmtChips(s.raises)} />
+      <StatRow label="Checked" value={fmtChips(s.checks)} />
+      <StatRow label="All-Ins" value={fmtChips(s.allIns)} accent="red" />
+      <StatRow label="Voluntary Put In Pot" value={`${vpip}%`} accent="purple" sub="calls + raises per hand" />
 
       {/* Chips */}
-      <SectionLabel>💸 Chips</SectionLabel>
-      <StatRow icon="💵" label="Blinds Paid" value={fmtChips(s.blindsPaid)} accent="red" />
-      <StatRow icon="💰" label="Total Wagered" value={fmtChips(s.totalWagered)} accent="gold" />
-      <StatRow icon="🛡️" label="Biggest Pot Won" value={fmtChips(s.biggestPotWon)} accent="green" />
+      <SectionLabel>Chips</SectionLabel>
+      <StatRow label="Blinds Paid" value={fmtChips(s.blindsPaid)} accent="red" />
+      <StatRow label="Total Wagered" value={fmtChips(s.totalWagered)} accent="gold" />
+      <StatRow label="Biggest Pot Won" value={fmtChips(s.biggestPotWon)} accent="green" />
 
       {/* Showdowns */}
-      <SectionLabel>⚔️ Showdowns</SectionLabel>
-      <StatRow icon="🎭" label="Showdowns Reached" value={fmtChips(s.showdownsReached)} />
-      <StatRow icon="🥇" label="Showdowns Won" value={fmtChips(s.showdownsWon)} accent="gold" />
-      <StatRow icon="📐" label="Showdown Win Rate" value={`${showdownWinsPct}%`} accent="green" />
-      <StatRow icon="✨" label="Best Hand Made" value={s.bestHandName || 'High Card'} accent="purple" sub={s.bestHandRank ? `rank ${s.bestHandRank}` : undefined} />
+      <SectionLabel>Showdowns</SectionLabel>
+      <StatRow label="Showdowns Reached" value={fmtChips(s.showdownsReached)} />
+      <StatRow label="Showdowns Won" value={fmtChips(s.showdownsWon)} accent="gold" />
+      <StatRow label="Showdown Win Rate" value={`${showdownWinsPct}%`} accent="green" />
+      <StatRow label="Best Hand Made" value={s.bestHandName || 'High Card'} accent="purple" sub={s.bestHandRank ? `rank ${s.bestHandRank}` : undefined} />
     </div>
   );
 }
@@ -333,7 +341,6 @@ export default function ProgressPanel() {
                    transition-all duration-200 active:scale-95"
         title={`${completedQuests}/${totalQuests} quests completed · ${handsPlayed} hands played`}
       >
-        <span className="text-sm leading-none">🎯</span>
         <span className="text-xs font-bold">{completedQuests}/{totalQuests}</span>
       </button>
 
@@ -355,7 +362,6 @@ export default function ProgressPanel() {
             <div className="shrink-0 px-4 pt-3 pb-0 border-b border-gray-800">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-base">🎯</span>
                   <h2 className="text-base font-bold text-white">Progress</h2>
                 </div>
                 <button

@@ -168,7 +168,7 @@ function JoinModal({ level, bankroll, onClose, onJoin }) {
 
         {error && (
           <div className="mt-3 bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
-            <span>⚠️ {error}</span>
+            {error}
           </div>
         )}
 
@@ -275,7 +275,10 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
       <header className="relative bg-gray-900/80 backdrop-blur-sm border-b border-gray-800 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-felt to-felt-dark border border-poker-gold/30 flex items-center justify-center">
-            <span className="text-lg">🃏</span>
+            <svg className="w-5 h-5 text-poker-gold" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 3c1.8 2.5 4.5 4.2 4.5 7a4.5 4.5 0 01-9 0c0-2.8 2.7-4.5 4.5-7zM12 3c-3.2 2.6-5.5 5-7.3 8.3A4.5 4.5 0 0012 15.4 4.5 4.5 0 0019.3 11.3C17.5 8 15.2 5.6 12 3z" opacity="0.4"/>
+              <path d="M12 17.5h-6a1 1 0 00-1 1V20a1 1 0 001 1h6a1 1 0 001-1v-1.5a1 1 0 00-1-1z" opacity="0.6"/>
+            </svg>
           </div>
           <div>
             <h1 className="text-sm font-bold text-white">Ring Games</h1>
@@ -288,7 +291,9 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
         <div className="flex items-center gap-3">
           {/* Bankroll */}
           <div className="bg-gray-800/70 rounded-xl px-3 py-1.5 flex items-center gap-2">
-            <span className="text-yellow-400 text-xs">💰</span>
+            <svg className="w-3.5 h-3.5 text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2a3 3 0 013 3v2.5h2.5a3 3 0 013 3V13a3 3 0 01-3 3h-2.5V18.5a3 3 0 01-3 3 3 3 0 01-3-3V16H8.5a3 3 0 01-3-3v-2.5a3 3 0 013-3H9V5a3 3 0 013-3zm0 4a1 1 0 00-1 1v2.5h1a1 1 0 100-2H11V7a1 1 0 00-1-1h2zm-3 5.5h6V11a1 1 0 00-1-1h-4a1 1 0 00-1 1v.5zm0 2V14a1 1 0 001 1h4a1 1 0 001-1v-.5H9z" />
+            </svg>
             <div className="text-right">
               <p className="text-xs font-bold text-poker-gold font-mono">{formatBankroll(bankroll)}</p>
               <p className="text-[8px] text-gray-500 leading-none">chips</p>
@@ -325,7 +330,9 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
         ) : !loading ? (
           <div className="text-center py-20 animate-fade-in">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-800/50 mb-4">
-              <span className="text-3xl opacity-50">🪑</span>
+              <svg className="w-8 h-8 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 4h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zm-2 14h18M12 14v5" />
+              </svg>
             </div>
             <h3 className="text-lg font-semibold text-gray-400 mb-1">No stake data available</h3>
             <p className="text-sm text-gray-600">Try refreshing the page</p>

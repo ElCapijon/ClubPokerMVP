@@ -46,7 +46,6 @@ async function sendWelcomeEmail(to, displayName) {
             body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f0f0f; margin: 0; padding: 0; }
             .container { max-width: 480px; margin: 0 auto; padding: 32px 24px; }
             .header { text-align: center; margin-bottom: 24px; }
-            .logo { font-size: 48px; margin-bottom: 8px; }
             h1 { color: #ffffff; font-size: 24px; margin: 0; }
             .card { background: #1a1a2e; border-radius: 16px; padding: 32px 24px; border: 1px solid #2a2a4a; }
             .card h2 { color: #fbbf24; font-size: 20px; margin: 0 0 12px 0; }
@@ -62,11 +61,10 @@ async function sendWelcomeEmail(to, displayName) {
         <body>
           <div class="container">
             <div class="header">
-              <div class="logo">🃏</div>
               <h1>Welcome to ${APP_NAME}</h1>
             </div>
             <div class="card">
-              <h2>Hey ${displayName}! 👋</h2>
+              <h2>Hey ${displayName}!</h2>
               <p>Your account is ready. You've been gifted <strong>10,000 chips</strong> to start your poker journey. Choose your stakes and join a table!</p>
               <div class="stats">
                 <div class="stat">
@@ -79,7 +77,7 @@ async function sendWelcomeEmail(to, displayName) {
                 </div>
               </div>
               <div style="text-align: center;">
-                <a href="${APP_URL}" class="btn">🚀 Play Now</a>
+                <a href="${APP_URL}" class="btn">Play Now</a>
               </div>
             </div>
             <div class="footer">
@@ -124,7 +122,6 @@ async function sendPasswordResetEmail(to, resetToken) {
             body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f0f0f; margin: 0; padding: 0; }
             .container { max-width: 480px; margin: 0 auto; padding: 32px 24px; }
             .header { text-align: center; margin-bottom: 24px; }
-            .logo { font-size: 48px; margin-bottom: 8px; }
             h1 { color: #ffffff; font-size: 24px; margin: 0; }
             .card { background: #1a1a2e; border-radius: 16px; padding: 32px 24px; border: 1px solid #2a2a4a; }
             .card h2 { color: #fbbf24; font-size: 20px; margin: 0 0 12px 0; }
@@ -137,7 +134,6 @@ async function sendPasswordResetEmail(to, resetToken) {
         <body>
           <div class="container">
             <div class="header">
-              <div class="logo">🔐</div>
               <h1>Password Reset</h1>
             </div>
             <div class="card">
@@ -147,7 +143,7 @@ async function sendPasswordResetEmail(to, resetToken) {
                 <a href="${resetUrl}" class="btn">Reset Password</a>
               </div>
               <div class="warning">
-                ⚠️ This link expires in 1 hour. If you didn't request this, you can safely ignore this email.
+                This link expires in 1 hour. If you didn't request this, you can safely ignore this email.
               </div>
             </div>
             <div class="footer">

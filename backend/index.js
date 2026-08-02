@@ -253,7 +253,7 @@ if (isProduction) {
 }
 
 if (isProduction) {
-  console.log('🏁 Production mode');
+  console.log('[Server] Production mode');
   console.log('   Serving frontend from dist/');
 }
 
@@ -1770,25 +1770,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ---------- SEND EMOJI ----------
-  socket.on('send_emoji', ({ gameId, emoji }) => {
-    const playerInfo = socketToPlayer.get(socket.id);
-    if (!playerInfo || playerInfo.gameId !== gameId) return;
-
-    const game = ringGames.get(gameId);
-    if (!game) return;
-
-    const seat = game.seats[playerInfo.seatIndex];
-    if (!seat) return;
-
-    io.to(gameRoom(gameId)).emit('emoji_received', {
-      seatIndex: playerInfo.seatIndex,
-      userName: seat.userName,
-      emoji,
-      timestamp: Date.now(),
-    });
-  });
-
   // ---------- REBUY ----------
   socket.on('player_rebuy', async ({ gameId, buyinAmount }, callback) => {
     try {
@@ -2077,7 +2058,7 @@ process.on('SIGINT', () => {
 // Start Server
 // ============================================================
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🃏 Poker Club Server running on port ${PORT}`);
+  console.log(`[Server] Poker Club running on port ${PORT}`);
   console.log(`   CORS Origin: ${process.env.CORS_ORIGIN || 'http://localhost:5173'}`);
   console.log(`   WebSocket ready for connections`);
 });

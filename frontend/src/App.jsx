@@ -228,7 +228,10 @@ export default function App() {
       <div className="min-h-screen-mobile bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 flex items-center justify-center p-4">
         <div className="text-center animate-fade-in">
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-felt to-felt-dark border-2 border-poker-gold/30 shadow-xl shadow-felt/20 mb-6">
-            <span className="text-4xl animate-spin">🃏</span>
+            <svg className="w-10 h-10 text-poker-gold animate-spin" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 3c1.8 2.5 4.5 4.2 4.5 7a4.5 4.5 0 01-9 0c0-2.8 2.7-4.5 4.5-7zM12 3c-3.2 2.6-5.5 5-7.3 8.3A4.5 4.5 0 0012 15.4 4.5 4.5 0 0019.3 11.3C17.5 8 15.2 5.6 12 3z" opacity="0.4"/>
+              <path d="M12 17.5h-6a1 1 0 00-1 1V20a1 1 0 001 1h6a1 1 0 001-1v-1.5a1 1 0 00-1-1z" opacity="0.6"/>
+            </svg>
           </div>
           <h2 className="text-xl font-bold font-display text-white mb-2">
             {reconnectError ? 'Session Expired' : 'Reconnecting...'}
@@ -294,7 +297,10 @@ export default function App() {
         {/* Logo */}
         <div className="text-center mb-6 animate-fade-in">
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-felt to-felt-dark border-2 border-poker-gold/30 shadow-xl shadow-felt/20 mb-4">
-            <span className="text-4xl">🃏</span>
+            <svg className="w-10 h-10 text-poker-gold" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 3c1.8 2.5 4.5 4.2 4.5 7a4.5 4.5 0 01-9 0c0-2.8 2.7-4.5 4.5-7zM12 3c-3.2 2.6-5.5 5-7.3 8.3A4.5 4.5 0 0012 15.4 4.5 4.5 0 0019.3 11.3C17.5 8 15.2 5.6 12 3z" opacity="0.4"/>
+              <path d="M12 17.5h-6a1 1 0 00-1 1V20a1 1 0 001 1h6a1 1 0 001-1v-1.5a1 1 0 00-1-1z" opacity="0.6"/>
+            </svg>
           </div>
           <h1 className="text-4xl font-bold font-display text-white mb-2">
             Poker Club
@@ -372,7 +378,9 @@ function ForgotPasswordForm({ onBack }) {
     return (
       <div className="text-center">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-900/30 border border-green-700/50 mb-4">
-          <span className="text-3xl">📧</span>
+          <svg className="w-8 h-8 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.9 5.3a2 2 0 002.2 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          </svg>
         </div>
         <h3 className="text-lg font-bold text-white mb-2">Check Your Email</h3>
         <p className="text-sm text-gray-400 mb-6 leading-relaxed">
@@ -408,7 +416,6 @@ function ForgotPasswordForm({ onBack }) {
       {error && (
         <div className="bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
           <div className="flex items-center gap-2">
-            <span>⚠️</span>
             <span>{error}</span>
           </div>
         </div>
@@ -422,10 +429,7 @@ function ForgotPasswordForm({ onBack }) {
         {loading ? (
           <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
         ) : (
-          <>
-            <span>📨</span>
-            Send Reset Link
-          </>
+          'Send Reset Link'
         )}
       </button>
 
@@ -474,7 +478,9 @@ function ResetPasswordForm({ token, onComplete }) {
     return (
       <div className="text-center">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-900/30 border border-green-700/50 mb-4">
-          <span className="text-3xl">✅</span>
+          <svg className="w-8 h-8 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
         </div>
         <h3 className="text-lg font-bold text-white mb-2">Password Reset!</h3>
         <p className="text-sm text-gray-400 mb-6 leading-relaxed">
@@ -510,7 +516,6 @@ function ResetPasswordForm({ token, onComplete }) {
       {error && (
         <div className="bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
           <div className="flex items-center gap-2">
-            <span>⚠️</span>
             <span>{error}</span>
           </div>
         </div>
@@ -524,10 +529,7 @@ function ResetPasswordForm({ token, onComplete }) {
         {loading ? (
           <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
         ) : (
-          <>
-            <span>🔒</span>
-            Reset Password
-          </>
+          'Reset Password'
         )}
       </button>
     </form>
@@ -588,7 +590,6 @@ function LoginForm({ onLogin, onSwitch, onForgotPassword }) {
       {error && (
         <div className="bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
           <div className="flex items-center gap-2">
-            <span>⚠️</span>
             <span>{error}</span>
           </div>
         </div>
@@ -602,10 +603,7 @@ function LoginForm({ onLogin, onSwitch, onForgotPassword }) {
         {loading ? (
           <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
         ) : (
-          <>
-            <span>🔐</span>
-            Sign In
-          </>
+          'Sign In'
         )}
       </button>
 
@@ -702,7 +700,6 @@ function SignupForm({ onRegister, onSwitch }) {
       {error && (
         <div className="bg-red-900/40 border border-red-800/50 rounded-xl p-3 text-red-300 text-sm">
           <div className="flex items-center gap-2">
-            <span>⚠️</span>
             <span>{error}</span>
           </div>
         </div>
@@ -716,10 +713,7 @@ function SignupForm({ onRegister, onSwitch }) {
         {loading ? (
           <span className="inline-block w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
         ) : (
-          <>
-            <span>🎉</span>
-            Create Account
-          </>
+          'Create Account'
         )}
       </button>
 
