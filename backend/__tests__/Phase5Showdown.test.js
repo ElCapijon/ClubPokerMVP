@@ -1,4 +1,15 @@
-const { createHand, startHand, goToShowdown, handleAction } = require('../GameHand');
+const { createHand, startHand, goToShowdown, handleAction, applyShowdownDecision } = require('../GameHand');
+
+/** Resolve the interactive showdown reveal phase (everyone shows). */
+function completeShowdown(hand) {
+  let guard = 0;
+  while (hand.gameStatus === 'SHOWDOWN' && guard < 10) {
+    guard++;
+    const seat = hand.showdown.queue[hand.showdown.queuePos];
+    const r = applyShowdownDecision(hand, seat, true);
+    if (r.error) throw new Error(`Showdown decision failed: ${r.error}`);
+  }
+}
 
 function createClubState() {
   return {
@@ -128,6 +139,63 @@ describe('Phase 5 - Showdown & Side Pots', () => {
       const w300Charlie = pot300.winners.find(w => w.seatIndex === charlieSeat);
       expect(w300Charlie).toBeDefined();
     });
+
+    test('folded player chips are awarded (not destroyed) after a call-then-fold showdown', () => {
+      const club = createClubState();
+      const hand = createHand(club, 0);
+      startHand(hand);
+
+      // Deterministic hole cards so the outcome doesn't depend on the random board
+      hand.players[0].holeCards = [cc('A', 'h'), cc('K', 'h')]; // Alice: best hand
+      hand.players[1].holeCards = [cc('2', 'd'), cc('7', 'd')];
+      hand.players[2].holeCards = [cc('3', 'c'), cc('8', 's')];
+
+      const aliceSeat = hand.players[0].seatIndex;
+      const bobSeat = hand.players[1].seatIndex;
+      const charlieSeat = hand.players[2].seatIndex;
+
+      // Preflop: everyone calls → Alice 20, Bob 20, Charlie 20 (pot 60)
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      handleAction(hand, hand.players[hand.currentPlayerIndex].seatIndex, 'call');
+      expect(hand.gameStatus).toBe('FLOP');
+      expect(hand.pot).toBe(60);
+
+      // Flop: Bob (SB, first to act post-flop) bets 200, Charlie folds (his 20
+      // stays in the pot), Alice calls 200 → pot = 60 + 200 + 200 = 460
+      handleAction(hand, bobSeat, 'bet', 200);
+      handleAction(hand, charlieSeat, 'fold');
+      handleAction(hand, aliceSeat, 'call');
+      expect(hand.gameStatus).toBe('TURN');
+      expect(hand.pot).toBe(460);
+
+      // Turn: Bob check, Alice check → river. River: Bob check, Alice check → showdown
+      handleAction(hand, bobSeat, 'check');
+      handleAction(hand, aliceSeat, 'check');
+      handleAction(hand, bobSeat, 'check');
+      handleAction(hand, aliceSeat, 'check');
+
+      // Reveal phase: both live players decide (they show) → hand completes
+      expect(hand.gameStatus).toBe('SHOWDOWN');
+      completeShowdown(hand);
+      expect(hand.gameStatus).toBe('HAND_COMPLETE');
+      expect(hand.handResult).toBeDefined();
+
+      // The full pot (including Charlie's folded 20) must be awarded — no chips
+      // may be destroyed. Old buggy behavior awarded only 440 here.
+      const totalAwarded = hand.handResult.reduce((sum, r) => sum + r.potAmount, 0);
+      expect(totalAwarded).toBe(460);
+
+      // Charlie folded and must not appear as a winner anywhere
+      const foldedWins = hand.handResult.some(r =>
+        r.winners.some(w => w.seatIndex === charlieSeat)
+      );
+      expect(foldedWins).toBe(false);
+
+      // Charlie's stack stays exactly where it was when he folded (20 committed)
+      const charlie = hand.players.find(p => p.seatIndex === charlieSeat);
+      expect(charlie.stack).toBe(1500 - 20);
+    });
   });
 
   describe('Full hand with showdown', () => {
@@ -154,12 +222,16 @@ describe('Phase 5 - Showdown & Side Pots', () => {
         handleAction(hand, seatIdx, 'check');
       }
       
-      // All check river (this will trigger showdown)
+      // All check river (this will trigger the interactive showdown)
       for (let i = 0; i < 3; i++) {
         const seatIdx = hand.players[hand.currentPlayerIndex].seatIndex;
         handleAction(hand, seatIdx, 'check');
       }
-      
+
+      // Reveal phase: all three players show → hand completes
+      expect(hand.gameStatus).toBe('SHOWDOWN');
+      completeShowdown(hand);
+
       // Hand should be complete at showdown
       expect(hand.gameStatus).toBe('HAND_COMPLETE');
       expect(hand.handResult).toBeDefined();

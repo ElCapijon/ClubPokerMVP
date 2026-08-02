@@ -20,6 +20,9 @@ const GAME_STATES = {
   HAND_COMPLETE: 'HAND_COMPLETE',
 };
 
+// Seconds each player gets to decide Show Cards / Muck at showdown.
+const SHOWDOWN_DECISION_SECONDS = 12;
+
 /**
  * Create a new hand from a club's state.
  * 
@@ -40,6 +43,7 @@ function createHand(clubState, handCount) {
         seatIndex,
         userId: seat.userId,
         userName: seat.userName,
+        isBot: !!seat.isBot,
         holeCards: [],
         stack: seat.stack,
         betAmount: 0,         // total bet in this hand
@@ -295,6 +299,196 @@ function advanceStreet(hand) {
 }
 
 /**
+ * Compute the seat indices of every player who wins at least one pot, using
+ * the current (final) hand state. Used by the showdown phase to determine
+ * who must show their cards (pot winners can never muck).
+ */
+function computePotWinnerSeats(hand) {
+  const results = determineWinners(
+    hand.players.map((p, idx) => ({
+      playerIndex: idx,
+      seatIndex: p.seatIndex,
+      holeCards: p.holeCards,
+      stack: p.stack,
+      betAmount: p.betAmount,
+      isAllIn: p.isAllIn,
+      isFolded: p.isFolded,
+    })),
+    hand.communityCards
+  );
+  const seats = new Set();
+  for (const pot of results) {
+    for (const w of pot.winners) {
+      // determineWinners keys winners by playerIndex (index into the players
+      // array) — map back to the seat index.
+      const hp = hand.players[w.playerIndex];
+      if (hp) seats.add(hp.seatIndex);
+    }
+  }
+  return [...seats];
+}
+
+/**
+ * Build the ordered list of live players (non-folded, non-all-in) who must
+ * decide at showdown — player indices, in reveal order.
+ *
+ * Real-poker order: the last player to bet/raise on the river shows first;
+ * if there was no betting on the river, the first player to act left of the
+ * dealer shows first. Everyone else follows clockwise.
+ */
+function buildShowdownOrder(hand) {
+  const deciders = hand.players
+    .map((p, idx) => ({ p, idx }))
+    .filter(({ p }) => !p.isFolded && !p.isAllIn);
+  if (deciders.length === 0) return [];
+  if (deciders.length === 1) return [deciders[0].idx];
+
+  let startIdx = hand.lastRaiserIndex;
+  const startValid = startIdx >= 0
+    && !hand.players[startIdx].isFolded
+    && !hand.players[startIdx].isAllIn;
+  if (!startValid) {
+    startIdx = getNextActivePlayerIndex(hand, hand.dealerPlayerIndex);
+  }
+  if (startIdx < 0) return deciders.map(({ idx }) => idx);
+
+  const order = [];
+  let idx = startIdx;
+  while (order.length < deciders.length) {
+    if (!order.includes(idx)) order.push(idx);
+    const next = getNextActivePlayerIndex(hand, idx);
+    if (next === idx || next === startIdx) break;
+    idx = next;
+  }
+  return order;
+}
+
+/**
+ * Whether a live player may muck right now. A player can only muck once their
+ * hand is beaten by an already-exposed hand (all-in auto-reveals count), and
+ * pot winners can never muck — the winning hand must be shown. This guarantees
+ * nobody accidentally forfeits by mucking and the winner's cards always appear.
+ */
+function canMuckNow(hand, seatIndex) {
+  const sd = hand.showdown;
+  const player = hand.players.find(p => p.seatIndex === seatIndex);
+  if (!sd || !player || player.isFolded || player.isAllIn) return false;
+  // Pot winners must show their cards — they cannot muck.
+  if (sd.winnerSeats && sd.winnerSeats.includes(seatIndex)) return false;
+  // A player beaten by an exposed hand may muck.
+  if (hand.communityCards.length < 5) return true; // defensive: board incomplete
+  const myHand = evaluateHand(player.holeCards, hand.communityCards);
+  if (!myHand) return true;
+  for (const seat of sd.revealed) {
+    const other = hand.players.find(p => p.seatIndex === seat);
+    if (!other || other.isFolded) continue;
+    const otherHand = evaluateHand(other.holeCards, hand.communityCards);
+    if (otherHand && compareHands(otherHand, myHand) > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Begin the interactive showdown reveal phase.
+ *
+ * All-in players' cards are revealed automatically (no further action — the
+ * standard online rule). Live players then decide one at a time, in real-poker
+ * order (last river aggressor first, otherwise player left of the dealer, then
+ * clockwise), whether to show their cards or muck. If every remaining player
+ * is all-in there is nothing to decide and the hand completes immediately.
+ */
+function startShowdown(hand) {
+  hand.gameStatus = GAME_STATES.SHOWDOWN;
+
+  const order = buildShowdownOrder(hand);
+  const allInSeats = hand.players
+    .filter(p => !p.isFolded && p.isAllIn)
+    .map(p => p.seatIndex);
+
+  hand.showdown = {
+    active: true,
+    queue: order,
+    queuePos: 0,
+    revealed: allInSeats,
+    mucked: [],
+    winnerSeats: computePotWinnerSeats(hand),
+    decisionSeconds: SHOWDOWN_DECISION_SECONDS,
+  };
+
+  if (order.length === 0) {
+    // Everyone is all-in — all hands are already exposed.
+    goToShowdown(hand);
+  }
+  return hand;
+}
+
+/**
+ * Record a live player's showdown decision (show or muck) and advance the
+ * reveal queue. When the last player has decided, the hand completes.
+ * Returns { hand, error }.
+ */
+function applyShowdownDecision(hand, seatIndex, show) {
+  const sd = hand.showdown;
+  if (!sd || !sd.active || hand.gameStatus !== GAME_STATES.SHOWDOWN) {
+    return { hand, error: 'No showdown in progress' };
+  }
+  const currentSeat = sd.queue[sd.queuePos];
+  if (currentSeat === undefined || currentSeat !== seatIndex) {
+    return { hand, error: 'Not your turn to reveal' };
+  }
+  const player = hand.players.find(p => p.seatIndex === seatIndex);
+  if (!player || player.isFolded) {
+    return { hand, error: 'Player is not in the hand' };
+  }
+  if (!show && !canMuckNow(hand, seatIndex)) {
+    return { hand, error: 'You hold the winning hand — your cards must be shown' };
+  }
+  if (show) {
+    if (!sd.revealed.includes(seatIndex)) sd.revealed.push(seatIndex);
+  } else {
+    sd.mucked.push(seatIndex);
+  }
+  sd.queuePos++;
+  if (sd.queuePos >= sd.queue.length) {
+    goToShowdown(hand);
+  }
+  return { hand, error: null };
+}
+
+/**
+ * Apply the final reveal policy to every player and complete the hand.
+ *
+ * - Uncontested (everyone folded): nobody shows.
+ * - Multiway showdown: pot winners and all-in players always show; live
+ *   losers show only if they chose to during the phase, otherwise they muck.
+ */
+function applyRevealPolicy(hand, winnerSeats) {
+  const sd = hand.showdown;
+  const uncontested = Array.isArray(hand.handResult)
+    && hand.handResult.length === 1
+    && hand.handResult[0].winners[0]?.handResult?.rankName === 'Uncontested';
+
+  for (const p of hand.players) {
+    if (p.isFolded) {
+      p.revealed = false;
+      p.mucked = false;
+      continue;
+    }
+    if (uncontested) {
+      p.revealed = false;
+      p.mucked = false;
+      continue;
+    }
+    const won = winnerSeats.has(p.seatIndex);
+    const allIn = p.isAllIn;
+    const showed = sd ? sd.revealed.includes(p.seatIndex) : true;
+    p.revealed = won || allIn || showed;
+    p.mucked = !!sd && sd.mucked.includes(p.seatIndex) && !won;
+  }
+  if (sd) sd.active = false;
+}
+
+/**
  * Evaluate hands and determine winners at showdown.
  * Returns the hand with result data attached.
  * Attaches winningRank and winningUserId for challenge tracking.
@@ -325,6 +519,8 @@ function goToShowdown(hand) {
     hand.handResult = results;
     hand.winningUserId = winner.userId;
     hand.winningRank = 0;
+    // Nobody shows on an uncontested win — the winner takes the pot unseen.
+    applyRevealPolicy(hand, new Set([winner.seatIndex]));
     hand.gameStatus = GAME_STATES.HAND_COMPLETE;
     return hand;
   }
@@ -376,6 +572,14 @@ function goToShowdown(hand) {
   hand.handResult = mappedResults;
   hand.winningUserId = firstWinnerId;
   hand.winningRank = highestRank > 0 ? highestRank : 0;
+
+  // Final reveal policy: winners + all-in always show, losers may have mucked.
+  const winnerSeats = new Set();
+  for (const pot of mappedResults) {
+    for (const w of pot.winners) winnerSeats.add(w.seatIndex);
+  }
+  applyRevealPolicy(hand, winnerSeats);
+
   hand.gameStatus = GAME_STATES.HAND_COMPLETE;
   return hand;
 }
@@ -392,10 +596,47 @@ function isHandComplete(hand) {
  * Suitable for broadcasting to all players.
  */
 function getPublicState(hand) {
-  // Calculate remaining action time
+  // Calculate remaining action time. During the interactive showdown phase the
+  // countdown tracks the current decider's reveal timer instead of the betting
+  // clock.
   const elapsed = Date.now() - hand.actionStartTime;
-  const totalMs = (hand.actionTimer || 20) * 1000;
+  const totalMs = (hand.gameStatus === GAME_STATES.SHOWDOWN && hand.showdown)
+    ? (hand.showdown.decisionSeconds || 12) * 1000
+    : (hand.actionTimer || 20) * 1000;
   const remaining = Math.max(0, Math.ceil((totalMs - elapsed) / 1000));
+
+  // Interactive showdown reveal phase — which seats' cards are exposed, who
+  // must decide next, and whether the current decider may muck.
+  let showdown = {
+    active: false,
+    queue: [],
+    queuePos: 0,
+    currentSeatIndex: -1,
+    currentCanMuck: true,
+    revealed: [],
+    mucked: [],
+  };
+  if (hand.gameStatus === GAME_STATES.SHOWDOWN && hand.showdown && hand.showdown.active) {
+    const sd = hand.showdown;
+    const currentSeat = sd.queue[sd.queuePos];
+    showdown = {
+      active: true,
+      queue: sd.queue.map(seat => ({
+        seatIndex: seat,
+        userName: hand.players.find(p => p.seatIndex === seat)?.userName || '',
+      })),
+      queuePos: sd.queuePos,
+      currentSeatIndex: currentSeat !== undefined ? currentSeat : -1,
+      currentCanMuck: currentSeat !== undefined ? canMuckNow(hand, currentSeat) : true,
+      revealed: sd.revealed
+        .map(seat => {
+          const p = hand.players.find(pl => pl.seatIndex === seat);
+          return p ? { seatIndex: seat, holeCards: p.holeCards } : null;
+        })
+        .filter(Boolean),
+      mucked: sd.mucked,
+    };
+  }
 
   return {
     type: 'game_state_sync',
@@ -417,9 +658,11 @@ function getPublicState(hand) {
     lastRaiserSeatIndex: hand.lastRaiserIndex >= 0
       ? hand.players[hand.lastRaiserIndex].seatIndex
       : -1,
+    showdown,
     players: hand.players.map(p => ({
       seatIndex: p.seatIndex,
       userName: p.userName,
+      isBot: !!p.isBot,
       stack: p.stack,
       betAmount: p.betAmount,
       roundBet: p.roundBet, // bet in the current betting round (reset each street)
@@ -484,8 +727,16 @@ function advanceCompleteRoundStep(hand) {
   if (!isRoundComplete(hand) || hand.gameStatus === GAME_STATES.SHOWDOWN || isHandComplete(hand)) {
     return false;
   }
-  if (hand.gameStatus === GAME_STATES.RIVER || hand.players.filter(p => !p.isFolded).length <= 1) {
-    goToShowdown(hand);
+  const liveCount = hand.players.filter(p => !p.isFolded).length;
+  if (hand.gameStatus === GAME_STATES.RIVER || liveCount <= 1) {
+    if (liveCount <= 1) {
+      // Everyone folded — the last player wins immediately, cards stay hidden.
+      goToShowdown(hand);
+    } else {
+      // Multiway showdown — run the interactive reveal phase. If every
+      // remaining player is all-in this completes synchronously.
+      startShowdown(hand);
+    }
   } else {
     advanceStreet(hand);
   }
@@ -511,8 +762,10 @@ function advanceCompleteRounds(hand) {
  * for the state machine, but full validation in Phase 4.
  */
 function handleAction(hand, seatIndex, action, amount) {
-  // Reject actions on completed hands
-  if (hand.gameStatus === GAME_STATES.HAND_COMPLETE) {
+  // Reject actions on completed hands and during the interactive showdown
+  // reveal phase (no betting happens there — a stray fold/call must not be
+  // able to strip a live player's pot eligibility).
+  if (hand.gameStatus === GAME_STATES.SHOWDOWN || hand.gameStatus === GAME_STATES.HAND_COMPLETE) {
     return { hand, error: 'Hand is already complete' };
   }
 
@@ -644,6 +897,7 @@ function handleAction(hand, seatIndex, action, amount) {
 
 module.exports = {
   GAME_STATES,
+  SHOWDOWN_DECISION_SECONDS,
   createHand,
   startHand,
   getNextActivePlayerIndex,
@@ -652,6 +906,11 @@ module.exports = {
   advanceCompleteRoundStep,
   advanceCompleteRounds,
   goToShowdown,
+  startShowdown,
+  applyShowdownDecision,
+  canMuckNow,
+  computePotWinnerSeats,
+  buildShowdownOrder,
   isHandComplete,
   getPublicState,
   getPrivateState,

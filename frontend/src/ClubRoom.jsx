@@ -143,6 +143,8 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const [showCashOut, setShowCashOut] = useState(false);
   const [cashingOut, setCashingOut] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  // Whether the server has bots enabled (hides the Add/Remove Bot buttons)
+  const [botsEnabled, setBotsEnabled] = useState(clubData.botsEnabled === true);
 
   // Game state
   const [communityCards, setCommunityCards] = useState([]);
@@ -154,6 +156,8 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const [dealerSeatIndex, setDealerSeatIndex] = useState(-1);
   const [handCount, setHandCount] = useState(0);
   const [handResult, setHandResult] = useState(null);
+  // Interactive showdown phase: who must reveal, whose cards are shown, who mucked
+  const [showdown, setShowdown] = useState(null);
 
   // Action state
   const [lastAction, setLastAction] = useState(null);
@@ -239,6 +243,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     const onStateUpdate = (data) => {
       setPlayers(data.players || Array(6).fill(null));
       setGameState(data.gameState || 'WAITING');
+      if (data.botsEnabled !== undefined) setBotsEnabled(data.botsEnabled === true);
     };
 
     const onGameStateSync = (data) => {
@@ -255,9 +260,12 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         // Clear hand result when a new hand starts
         if (data.gameStatus === 'PREFLOP') {
           setHandResult(null);
+          setShowdown(null);
         }
         setGameState(data.gameStatus);
       }
+      // Track the interactive showdown phase (reveal order, exposed cards, mucks)
+      setShowdown(data.showdown && data.showdown.active ? data.showdown : null);
 
       if (data.players) {
         // A genuine new hand (handCount advances forward; mount-time jumps
@@ -273,7 +281,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         setPlayers(prev => {
           const updated = isNewHand
             ? prev.map(existing => existing
-                ? { ...existing, isAllIn: false, isFolded: false, roundBet: 0 }
+                ? { ...existing, isAllIn: false, isFolded: false, roundBet: 0, mucked: false, showHoleCards: false }
                 : existing)
             : [...prev];
           for (const p of data.players) {
@@ -286,6 +294,25 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               showHoleCards: false,
               holeCards: existing?.holeCards || undefined,
             };
+          }
+          // During the interactive showdown the public state carries the
+          // exposed cards and muck decisions — apply them to the seats.
+          if (data.showdown && data.showdown.active) {
+            for (const seat of data.showdown.mucked || []) {
+              if (updated[seat]) {
+                updated[seat] = { ...updated[seat], mucked: true, showHoleCards: false };
+              }
+            }
+            for (const r of data.showdown.revealed || []) {
+              if (updated[r.seatIndex]) {
+                updated[r.seatIndex] = {
+                  ...updated[r.seatIndex],
+                  mucked: false,
+                  showHoleCards: true,
+                  holeCards: r.holeCards,
+                };
+              }
+            }
           }
           return updated;
         });
@@ -327,8 +354,10 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
       setHandCount(data.handCount || 0);
       setHoleCards(data.holeCards || []);
       if (data.gameStatus) {
+        if (data.gameStatus === 'PREFLOP') setShowdown(null);
         setGameState(data.gameStatus);
       }
+      setShowdown(data.showdown && data.showdown.active ? data.showdown : null);
 
       if (data.players) {
         // Same new-hand reset as onGameStateSync: a rejoin snapshot arrives
@@ -342,7 +371,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         setPlayers(prev => {
           const updated = isNewHand
             ? prev.map(existing => existing
-                ? { ...existing, isAllIn: false, isFolded: false, roundBet: 0 }
+                ? { ...existing, isAllIn: false, isFolded: false, roundBet: 0, mucked: false, showHoleCards: false }
                 : existing)
             : [...prev];
           for (const p of data.players) {
@@ -355,6 +384,25 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               holeCards: existing?.holeCards || data.holeCards || undefined,
             };
           }
+          // Reconnecting mid-showdown: replay the exposed cards + mucks so the
+          // reconnected client sees the reveal state so far.
+          if (data.showdown && data.showdown.active) {
+            for (const seat of data.showdown.mucked || []) {
+              if (updated[seat]) {
+                updated[seat] = { ...updated[seat], mucked: true, showHoleCards: false };
+              }
+            }
+            for (const r of data.showdown.revealed || []) {
+              if (updated[r.seatIndex]) {
+                updated[r.seatIndex] = {
+                  ...updated[r.seatIndex],
+                  mucked: false,
+                  showHoleCards: true,
+                  holeCards: r.holeCards,
+                };
+              }
+            }
+          }
           return updated;
         });
       }
@@ -362,6 +410,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
     const onHandComplete = (data) => {
       setHandResult(data);
+      setShowdown(null); // reveal phase is over — final state lives on the players
       setLastAction(null);
 
       if (data.handResult) {
@@ -409,12 +458,18 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         setPlayers(prev => {
           const updated = [...prev];
           for (const p of data.players) {
+            const existing = updated[p.seatIndex];
             updated[p.seatIndex] = {
-              ...updated[p.seatIndex],
+              ...existing,
               stack: p.stack,
               roundBet: 0, // chips were flown to the winner
-              showHoleCards: true,
-              holeCards: p.holeCards,
+              // Reveal policy from the server: winners + all-in show, mucked
+              // losers and uncontested winners stay hidden.
+              mucked: !!p.mucked,
+              showHoleCards: !!p.revealed,
+              // Own cards are preserved even when mucked — you always know
+              // your own hand.
+              holeCards: p.holeCards || existing?.holeCards,
             };
           }
           return updated;
@@ -540,8 +595,26 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
     });
   }, [clubId, addNotification]);
 
+  const handleAddBots = useCallback(() => {
+    getSocket().emit('add_bots', { gameId: clubId }, (err) => {
+      if (err) addNotification(err.error || 'Failed to add bots', 'error');
+    });
+  }, [clubId, addNotification]);
+
+  const handleRemoveBots = useCallback(() => {
+    getSocket().emit('remove_bots', { gameId: clubId }, (err) => {
+      if (err) addNotification(err.error || 'Failed to remove bots', 'error');
+    });
+  }, [clubId, addNotification]);
+
   const handleAction = useCallback((action, amount) => {
     getSocket().emit('player_action', { gameId: clubId, action, amount }, (err) => {
+      if (err) addNotification(err.error || 'Action failed', 'error');
+    });
+  }, [clubId, addNotification]);
+
+  const handleShowdownDecision = useCallback((show) => {
+    getSocket().emit('showdown_decision', { gameId: clubId, show }, (err) => {
       if (err) addNotification(err.error || 'Action failed', 'error');
     });
   }, [clubId, addNotification]);
@@ -610,7 +683,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   // E.g. posting a blind that empties their stack — the game must keep
   // showing them as an all-in participant, not a busted spectator.
   const inLiveHand = gameState === 'PREFLOP' || gameState === 'FLOP'
-    || gameState === 'TURN' || gameState === 'RIVER';
+    || gameState === 'TURN' || gameState === 'RIVER' || gameState === 'SHOWDOWN';
   const isAllInMidHand = !!isMeAllIn && inLiveHand;
   const connectedPlayers = players.filter(p => p !== null);
   const isHost = players[mySeatIndex]?.isHost;
@@ -633,7 +706,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   // ─── Timer countdown ──────────────────────────────────────
   const [displayTimer, setDisplayTimer] = useState(0);
   useEffect(() => {
-    if (gameState === 'WAITING' || gameState === 'SHOWDOWN' || gameState === 'HAND_COMPLETE') {
+    if (gameState === 'WAITING' || gameState === 'HAND_COMPLETE') {
       setDisplayTimer(0);
       return;
     }
@@ -765,6 +838,16 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                   })}
                 </div>
               ))}
+              {/* Losers who mucked — their cards are never shown */}
+              {handResult.players?.some(p => p.mucked) && (
+                <div className="pt-2 mt-1 border-t border-gray-700/60 space-y-0.5">
+                  {handResult.players.filter(p => p.mucked).map(p => (
+                    <p key={p.seatIndex} className="text-xs text-gray-400">
+                      <span className="font-medium text-gray-300">{p.userName}</span> mucks
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -945,15 +1028,19 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                       ${isMe     ? 'bg-poker-gold/30' : ''}
                     `}>
                       <div className={`
-                        w-9 h-9 sm:w-11 sm:h-11 rounded-full flex items-center justify-center text-xs sm:text-sm font-bold relative
+                        w-9 h-9 sm:w-11 sm:h-11 rounded-full relative overflow-hidden
                         ${isMe
-                          ? 'bg-gradient-to-br from-poker-gold to-yellow-600 text-black shadow-md'
+                          ? 'bg-gradient-to-br from-poker-gold to-yellow-600 shadow-md'
                           : player.isConnected
-                            ? 'bg-gradient-to-br from-blue-500 to-blue-700 text-white shadow-md'
-                            : 'bg-gradient-to-br from-gray-500 to-gray-700 text-gray-300'
+                            ? 'bg-gradient-to-br from-blue-500 to-blue-700 shadow-md'
+                            : 'bg-gradient-to-br from-gray-500 to-gray-700'
                         }
                       `}>
-                        {player.userName?.charAt(0).toUpperCase() || '?'}
+                        {/* Profile silhouette avatar (transparent bg, so the
+                            seat's color gradient shows through around it) */}
+                        <img src="/profile-circle.svg" alt={`${player.userName} avatar`}
+                          className="w-full h-full object-cover select-none pointer-events-none"
+                          draggable={false} />
 
                         {/* Connected dot */}
                         {player.isConnected && (
@@ -965,6 +1052,10 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     {/* Name */}
                     <p className="text-[10px] sm:text-xs font-semibold text-white truncate max-w-[90px] sm:max-w-[110px] flex items-center justify-center gap-0.5">
                       {player.userName}
+                      {/* ── BOTS ── badge on bot seats so humans can tell
+                           who they're playing against */}
+                      {player.isBot && <span className="text-[8px] font-bold text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 rounded px-1 py-0.5">BOT</span>}
+                      {/* ── /BOTS ── */}
                       {player.isHost && !isMe && <span className="text-yellow-400 text-[10px]">★</span>}
                     </p>
 
@@ -979,6 +1070,12 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                         {player.holeCards.map((card, i) => (
                           <Card key={i} card={card} faceDown={false} size="sm" dealDelay={i} />
                         ))}
+                      </div>
+                    )}
+                    {/* Mucked loser — cards stay face down, never exposed */}
+                    {!isMe && (gameState === 'SHOWDOWN' || gameState === 'HAND_COMPLETE') && player.mucked && (
+                      <div className="mt-0.5 px-1.5 py-0.5 bg-gray-700/60 text-gray-300 text-[8px] sm:text-[9px] rounded-full font-semibold">
+                        Mucked
                       </div>
                     )}
 
@@ -1134,7 +1231,67 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     </button>
                   )}
 
+                  {/* ── BOTS ── Host controls: fill empty seats with bots so
+                       a solo player can practice. Hidden entirely when the
+                       server has bots disabled. */}
+                  {isHost && botsEnabled && (
+                    <>
+                      <button onClick={handleAddBots} disabled={connectedPlayers.length >= 6}
+                        className="px-4 py-2 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white rounded-xl font-semibold text-xs transition-all active:scale-95 border border-gray-600 disabled:opacity-40">
+                        + Add Bots
+                      </button>
+                      {connectedPlayers.some(p => p && p.isBot) && (
+                        <button onClick={handleRemoveBots}
+                          className="px-4 py-2 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white rounded-xl font-semibold text-xs transition-all active:scale-95 border border-gray-600">
+                          Remove Bots
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {/* ── /BOTS ── */}
+
                 </>
+              )}
+
+              {/* ===================== SHOWDOWN REVEAL ===================== */}
+              {gameState === 'SHOWDOWN' && showdown && showdown.active && (
+                <div className="flex flex-col items-center gap-1">
+                  {showdown.currentSeatIndex === mySeatIndex ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] sm:text-xs text-gray-400">Your turn to reveal:</span>
+                      <button onClick={() => handleShowdownDecision(true)}
+                        className="bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-bold rounded-xl px-4 py-2 text-xs
+                                   hover:from-emerald-500 hover:to-emerald-400 transition-all active:scale-95
+                                   shadow-lg shadow-emerald-600/20">
+                        Show Cards
+                      </button>
+                      <button onClick={() => handleShowdownDecision(false)} disabled={!showdown.currentCanMuck}
+                        title={showdown.currentCanMuck
+                          ? 'Muck your hand — throw it away face down'
+                          : 'You hold the winning hand — your cards must be shown'}
+                        className="bg-gray-700 text-gray-300 font-bold rounded-xl px-4 py-2 text-xs
+                                   hover:bg-gray-600 transition-all active:scale-95
+                                   disabled:opacity-40 disabled:cursor-not-allowed">
+                        Muck
+                      </button>
+                      {displayTimer > 0 && (
+                        <span className="text-xs text-gray-500 font-mono">{displayTimer}s</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                      <span>
+                        Waiting for{' '}
+                        <span className="font-medium text-white">
+                          {showdown.queue[showdown.queuePos]?.userName || 'player'}
+                        </span>{' '}
+                        to reveal...
+                      </span>
+                      {displayTimer > 0 && <span className="text-gray-500 font-mono">{displayTimer}s</span>}
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* ===================== IN-GAME CONTROLS ===================== */}

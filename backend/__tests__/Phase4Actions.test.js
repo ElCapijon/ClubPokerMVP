@@ -1,8 +1,20 @@
 const {
   GAME_STATES, createHand, startHand, handleAction,
   getNextActivePlayerIndex, isRoundComplete, isHandComplete,
-  advanceStreet, advanceCompleteRounds, advanceCompleteRoundStep
+  advanceStreet, advanceCompleteRounds, advanceCompleteRoundStep,
+  applyShowdownDecision
 } = require('../GameHand');
+
+/** Resolve the interactive showdown reveal phase (everyone shows). */
+function completeShowdown(hand) {
+  let guard = 0;
+  while (hand.gameStatus === GAME_STATES.SHOWDOWN && guard < 10) {
+    guard++;
+    const seat = hand.showdown.queue[hand.showdown.queuePos];
+    const r = applyShowdownDecision(hand, seat, true);
+    if (r.error) throw new Error(`Showdown decision failed: ${r.error}`);
+  }
+}
 
 function createClubState() {
   return {
@@ -184,10 +196,12 @@ describe('Phase 4 - Action Edge Cases', () => {
 
       // Drive the staged runout to showdown — Alice never acts again
       let guard = 0;
-      while (!isHandComplete(hand) && guard < 6) {
+      while (!isHandComplete(hand) && hand.gameStatus !== GAME_STATES.SHOWDOWN && guard < 6) {
         guard++;
         advanceCompleteRoundStep(hand);
       }
+      // The lone live player must decide at the interactive showdown
+      completeShowdown(hand);
       expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
       expect(hand.communityCards.length).toBe(5);
       expect(hand.handResult).toBeDefined();
@@ -216,10 +230,12 @@ describe('Phase 4 - Action Edge Cases', () => {
       expect(isRoundComplete(hand)).toBe(true);
 
       let guard = 0;
-      while (!isHandComplete(hand) && guard < 6) {
+      while (!isHandComplete(hand) && hand.gameStatus !== GAME_STATES.SHOWDOWN && guard < 6) {
         guard++;
         advanceCompleteRoundStep(hand);
       }
+      // The lone live player must decide at the interactive showdown
+      completeShowdown(hand);
       expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
       expect(hand.communityCards.length).toBe(5);
     });
@@ -568,14 +584,17 @@ describe('Phase 4 - Action Edge Cases', () => {
       // current player, and the hand runs all the way to showdown.
       const bbSeat = hand.players[2].seatIndex;
       let guard = 0;
-      while (hand.gameStatus !== GAME_STATES.HAND_COMPLETE && guard < 12) {
+      while (hand.gameStatus !== GAME_STATES.SHOWDOWN && hand.gameStatus !== GAME_STATES.HAND_COMPLETE && guard < 12) {
         guard++;
         const cur = hand.players[hand.currentPlayerIndex];
         expect(cur.seatIndex).not.toBe(bbSeat);
         const r = handleAction(hand, cur.seatIndex, 'check');
         expect(r.error).toBeNull();
       }
+      // Everyone checked down — the two live players decide at the showdown
+      completeShowdown(hand);
       expect(hand.communityCards.length).toBe(5);
+      expect(hand.gameStatus).toBe(GAME_STATES.HAND_COMPLETE);
     });
 
     test('heads-up where both blinds are all-in runs out via advanceCompleteRounds', () => {

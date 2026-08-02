@@ -259,6 +259,7 @@ export default function Lobby({ onEnterClub, displayName, userId, onLogout }) {
       initialPlayers: data.initialPlayers,
       gameState: data.gameState,
       hostId: data.hostId,
+      botsEnabled: data.botsEnabled === true,
     }, displayName);
   }, [onEnterClub, displayName]);
 

@@ -151,6 +151,117 @@ describe('PotSplitter', () => {
       expect(results.length).toBe(1);
       expect(results[0].winners.length).toBe(1);
       expect(results[0].winners[0].playerIndex).toBe(1); // Player 1 wins despite worse hand
+      // Player 0 folded, but their 100 chips are still in the pot — the winner
+      // must receive the full 200, not just the 100 the active player matched.
+      expect(results[0].winners[0].amountWon).toBe(200);
+    });
+
+    test('folded player chips stay in the pot (not destroyed)', () => {
+      const community = [
+        c('A', 'clubs'), c('K', 'spades'), c('Q', 'hearts'),
+        c('2', 'diamonds'), c('3', 'hearts'),
+      ];
+
+      const players = [
+        {
+          playerIndex: 0,
+          holeCards: [c('9', 'spades'), c('8', 'spades')], // High card — folded anyway
+          stack: 1400,
+          betAmount: 100,
+          isAllIn: false,
+          isFolded: true, // Called preflop, folded on the flop — chips stay in the pot
+        },
+        {
+          playerIndex: 1,
+          holeCards: [c('A', 'hearts'), c('K', 'hearts')], // Two pair (A & K)
+          stack: 1200,
+          betAmount: 300,
+          isAllIn: false,
+          isFolded: false,
+        },
+        {
+          playerIndex: 2,
+          holeCards: [c('A', 'diamonds'), c('K', 'diamonds')], // Same two pair — ties
+          stack: 1200,
+          betAmount: 300,
+          isAllIn: false,
+          isFolded: false,
+        },
+      ];
+
+      const results = determineWinners(players, community);
+
+      // Pot = 100 + 300 + 300 = 700. NOTHING may vanish.
+      const totalAwarded = results.reduce((sum, r) => sum + r.potAmount, 0);
+      expect(totalAwarded).toBe(700);
+
+      // Level 100 main pot (100 x 3 = 300): all three eligible, P1 & P2 tie → 150 each
+      const mainPot = results.find(r => r.level === 100);
+      expect(mainPot.potAmount).toBe(300);
+      expect(mainPot.winners.length).toBe(2);
+      expect(mainPot.winners.reduce((s, w) => s + w.amountWon, 0)).toBe(300);
+
+      // Level 300 side pot (200 x 2 = 400): P1 & P2 only, tie → 200 each
+      const sidePot = results.find(r => r.level === 300);
+      expect(sidePot.potAmount).toBe(400);
+      expect(sidePot.winners.length).toBe(2);
+      expect(sidePot.winners.reduce((s, w) => s + w.amountWon, 0)).toBe(400);
+    });
+
+    test('folded player betting more than everyone else: unmatched chips go to the best hand', () => {
+      const community = [
+        c('A', 'clubs'), c('K', 'spades'), c('Q', 'hearts'),
+        c('2', 'diamonds'), c('3', 'hearts'),
+      ];
+
+      const players = [
+        {
+          playerIndex: 0,
+          holeCards: [c('9', 'spades'), c('8', 'spades')],
+          stack: 1000,
+          betAmount: 500,
+          isAllIn: false,
+          isFolded: true, // Bet 500, folded when the short stacks shoved — 200 unmatched
+        },
+        {
+          playerIndex: 1,
+          holeCards: [c('A', 'hearts'), c('K', 'hearts')], // Best hand
+          stack: 0,
+          betAmount: 300,
+          isAllIn: true,
+          isFolded: false,
+        },
+        {
+          playerIndex: 2,
+          holeCards: [c('9', 'diamonds'), c('8', 'diamonds')],
+          stack: 0,
+          betAmount: 300,
+          isAllIn: true,
+          isFolded: false,
+        },
+      ];
+
+      const results = determineWinners(players, community);
+
+      // Pot = 500 + 300 + 300 = 1100. Nothing may vanish.
+      const totalAwarded = results.reduce((sum, r) => sum + r.potAmount, 0);
+      expect(totalAwarded).toBe(1100);
+
+      // Main pot (300 x 3 = 900): eligible P0,P1,P2; best active hand is P1 → 900
+      const mainPot = results.find(r => r.level === 300);
+      expect(mainPot.potAmount).toBe(900);
+      expect(mainPot.winners.length).toBe(1);
+      expect(mainPot.winners[0].playerIndex).toBe(1);
+      expect(mainPot.winners[0].amountWon).toBe(900);
+
+      // Orphaned pot (level 500, 200 chips): its only contributor (P0) folded.
+      // The chips can't vanish, so they're forfeited to the best active hand (P1).
+      const orphanPot = results.find(r => r.level === 500);
+      expect(orphanPot).toBeDefined();
+      expect(orphanPot.potAmount).toBe(200);
+      expect(orphanPot.winners.length).toBe(1);
+      expect(orphanPot.winners[0].playerIndex).toBe(1);
+      expect(orphanPot.winners[0].amountWon).toBe(200);
     });
 
     test('tie results in split pot', () => {

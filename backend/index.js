@@ -6,11 +6,20 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { GAME_STATES, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, isRoundComplete, handleAction, advanceCompleteRoundStep, getNextActivePlayerIndex } = require('./GameHand');
+const { GAME_STATES, SHOWDOWN_DECISION_SECONDS, createHand, startHand, getPublicState, getPrivateState, getReconnectionSnapshot, isHandComplete, isRoundComplete, handleAction, advanceCompleteRoundStep, getNextActivePlayerIndex, applyShowdownDecision, canMuckNow } = require('./GameHand');
 const ChallengeTracker = require('./ChallengeTracker');
 const HandStats = require('./HandStats');
 const pool = require('./db');
 const { sendWelcomeEmail, sendPasswordResetEmail } = require('./email');
+// ── BOTS ────────────────────────────────────────────────────
+// Bots fill empty seats so a table can run with fewer humans. Everything bot
+// related lives behind this flag: set BOTS_ENABLED = false to disable bots
+// entirely (the add_bots/remove_bots handlers refuse and the host buttons are
+// hidden). To REMOVE bots for good: delete backend/BotPlayer.js, the flag, and
+// every `// ── BOTS ──` section below + the bot UI in ClubRoom.jsx.
+const BOTS_ENABLED = true;
+const BotPlayer = require('./BotPlayer');
+// ────────────────────────────────────────────────────────────
 // Map rank number to stat name for hand rank tracking
 const RANK_STATS = {
   2: 'pairMade',
@@ -511,6 +520,10 @@ const actionTimers = new Map();
 // is running out). Map<gameId, timeoutId>
 const runoutTimers = new Map();
 
+// Interactive showdown reveal timers (one pending timeout per game while the
+// current player decides Show Cards / Muck). Map<gameId, timeoutId>
+const showdownTimers = new Map();
+
 // Last action per game
 // Map<gameId, { seatIndex, action, amount, timestamp }>
 const lastActions = new Map();
@@ -838,6 +851,7 @@ function broadcastTableState(gameId) {
       isConnected: seat.isConnected,
       isHost: seat.userId === game.hostId,
       isSittingOut: seat.isSittingOut || false,
+      isBot: !!seat.isBot,
       userId: seat.userId,
     };
   });
@@ -851,6 +865,8 @@ function broadcastTableState(gameId) {
     hostId: game.hostId,
     tableSettings: game.tableSettings,
     gameState: game.gameState,
+    // ── BOTS ── lets the client hide the add/remove-bot buttons when disabled
+    botsEnabled: BOTS_ENABLED,
   });
 }
 
@@ -891,6 +907,13 @@ function clearRunoutTimer(gameId) {
   if (runoutTimers.has(gameId)) {
     clearTimeout(runoutTimers.get(gameId));
     runoutTimers.delete(gameId);
+  }
+}
+
+function clearShowdownTimer(gameId) {
+  if (showdownTimers.has(gameId)) {
+    clearTimeout(showdownTimers.get(gameId));
+    showdownTimers.delete(gameId);
   }
 }
 
@@ -938,9 +961,14 @@ function scheduleRunout(gameId, hand) {
   clearActionTimer(gameId);
 
   // If the runout already finished before the first timer could fire,
-  // finalize immediately rather than waiting.
-  if (isHandComplete(hand) || hand.gameStatus === GAME_STATES.SHOWDOWN) {
+  // finalize immediately rather than waiting. If it landed in the interactive
+  // showdown phase, hand over to the reveal timer.
+  if (isHandComplete(hand)) {
     finalizeRunoutHand(gameId, hand);
+    return;
+  }
+  if (hand.gameStatus === GAME_STATES.SHOWDOWN) {
+    startShowdownTimer(gameId);
     return;
   }
 
@@ -949,8 +977,12 @@ function scheduleRunout(gameId, hand) {
     if (!g || g.currentHand !== hand) return; // hand replaced / table gone
     clearRunoutTimer(gameId);
 
-    if (isHandComplete(hand) || hand.gameStatus === GAME_STATES.SHOWDOWN) {
+    if (isHandComplete(hand)) {
       finalizeRunoutHand(gameId, hand);
+      return;
+    }
+    if (hand.gameStatus === GAME_STATES.SHOWDOWN) {
+      startShowdownTimer(gameId);
       return;
     }
 
@@ -962,6 +994,9 @@ function scheduleRunout(gameId, hand) {
 
     if (isHandComplete(hand)) {
       handleHandComplete(gameId, hand);
+    } else if (hand.gameStatus === GAME_STATES.SHOWDOWN) {
+      // Runout reached showdown with a live player — start the reveal phase.
+      startShowdownTimer(gameId);
     } else if (isRoundComplete(hand)) {
       // Everyone still all-in — deal the next street after a beat.
       runoutTimers.set(gameId, setTimeout(dealNextStreet, RUNOUT_STREET_DELAY_MS));
@@ -971,6 +1006,96 @@ function scheduleRunout(gameId, hand) {
   };
 
   runoutTimers.set(gameId, setTimeout(dealNextStreet, RUNOUT_STREET_DELAY_MS));
+}
+
+/**
+ * Start (or restart) the interactive showdown reveal timer for the current
+ * decider. Broadcasts the phase state so everyone sees whose turn it is, then
+ * arms a timeout. On timeout a player who can still win (not beaten by an
+ * exposed hand) is auto-shown; everyone else is auto-mucked — the reveal phase
+ * can never stall.
+ */
+function startShowdownTimer(gameId) {
+  clearShowdownTimer(gameId);
+  clearActionTimer(gameId);
+
+  const game = ringGames.get(gameId);
+  if (!game || !game.currentHand) return;
+  const hand = game.currentHand;
+  const sd = hand.showdown;
+  if (hand.gameStatus !== GAME_STATES.SHOWDOWN || !sd || !sd.active) return;
+
+  const currentSeat = sd.queue[sd.queuePos];
+  if (currentSeat === undefined) {
+    // Defensive: queue exhausted without completing — nothing to prompt.
+    return;
+  }
+
+  hand.actionStartTime = Date.now();
+  broadcastGameState(gameId);
+
+  // Guard against stale timers: a timeout callback that was already queued
+  // when the player acted must not auto-decide a NEWER turn (or double-finish
+  // the hand). Capture the position we armed for and verify it still holds.
+  const armedPos = sd.queuePos;
+  const armedSeat = currentSeat;
+
+  // ── BOTS ── Bots reveal on their own after a short delay instead of
+  // burning the full human decision timer. ──
+  const deciderIsBot = BOTS_ENABLED && !!(game.seats[currentSeat] && game.seats[currentSeat].isBot);
+  const decisionMs = deciderIsBot
+    ? 900 + Math.random() * 800 // ~0.9–1.7s
+    : (sd.decisionSeconds || SHOWDOWN_DECISION_SECONDS) * 1000;
+  // ── /BOTS ──
+
+  showdownTimers.set(gameId, setTimeout(() => {
+    clearShowdownTimer(gameId);
+    const g = ringGames.get(gameId);
+    if (!g || g.currentHand !== hand) return;
+    if (hand.gameStatus !== GAME_STATES.SHOWDOWN || !hand.showdown || !hand.showdown.active) return;
+    if (hand.showdown.queuePos !== armedPos) return; // a newer turn is active
+
+    const curSeat = hand.showdown.queue[hand.showdown.queuePos];
+    if (curSeat === undefined || curSeat !== armedSeat) return;
+
+    const player = hand.players.find(p => p.seatIndex === curSeat);
+    const canMuck = canMuckNow(hand, curSeat);
+
+    // ── BOTS ── bots pick show/muck themselves (winner always shows) ──
+    let show;
+    let log;
+    if (BOTS_ENABLED && game.seats[curSeat] && game.seats[curSeat].isBot) {
+      show = BotPlayer.decideShowdown(hand, curSeat, canMuck);
+      log = `[Bot] ${player ? player.userName : '?'} ${show ? 'shows' : 'mucks'} at showdown`;
+    } else {
+      // Winners must show; a player beaten by an exposed hand is auto-mucked.
+      show = !canMuck;
+      log = `[Showdown] ${player ? player.userName : '?'} timed out - ${show ? 'auto-shows' : 'mucks'}`;
+    }
+    console.log(log);
+    // ── /BOTS ──
+
+    // Defensive: the decision should never fail here (the turn is validated by
+    // the guards above). If it somehow does, bail instead of looping.
+    const decision = applyShowdownDecision(hand, curSeat, show);
+    if (decision.error) {
+      console.error('[Showdown] Auto-decision failed:', decision.error);
+      return;
+    }
+
+    g.gameState = hand.gameStatus;
+    for (const hp of hand.players) {
+      const s = g.seats[hp.seatIndex];
+      if (s) s.stack = hp.stack;
+    }
+    broadcastGameState(gameId);
+
+    if (isHandComplete(hand)) {
+      handleHandComplete(gameId, hand);
+    } else {
+      startShowdownTimer(gameId);
+    }
+  }, decisionMs));
 }
 
 function setActionTimer(gameId) {
@@ -1013,6 +1138,65 @@ function setActionTimer(gameId) {
     }
     return;
   }
+
+  // ── BOTS ── BOT TURN: bots play themselves after a short, human-feeling delay ──
+  if (BOTS_ENABLED) {
+    const seat = game.seats[currentPlayer.seatIndex];
+    if (seat && seat.isBot) {
+      const botDelay = 800 + Math.random() * 1200; // 0.8–2s
+      const timeout = setTimeout(() => {
+        const g = ringGames.get(gameId);
+        if (!g || !g.currentHand) return;
+
+        const h = g.currentHand;
+        if (h.gameStatus === GAME_STATES.SHOWDOWN || h.gameStatus === GAME_STATES.HAND_COMPLETE) return;
+
+        const pIdx = h.currentPlayerIndex;
+        if (pIdx < 0 || pIdx >= h.players.length) return;
+
+        const p = h.players[pIdx];
+        if (p.isFolded || p.isAllIn) return;
+
+        // Bot decides what to do
+        const decision = BotPlayer.decideAction(h, p.seatIndex, g);
+        console.log(`[Bot] ${p.userName} decides to ${decision.action}${decision.amount ? ' ' + decision.amount : ''}`);
+
+        const result = handleAction(h, p.seatIndex, decision.action, decision.amount);
+        if (result.error) {
+          console.error(`[Bot] Action error: ${result.error}`);
+          // Fallback: fold
+          const fallback = handleAction(h, p.seatIndex, 'fold');
+          if (fallback.error) return;
+        }
+
+        // Broadcast the bot's action so the client action feed shows it
+        // (recordAction sets lastActions AND emits last_action to the room).
+        recordAction(gameId, p.seatIndex, decision.action, decision.amount);
+
+        g.gameState = h.gameStatus;
+        for (const hp of h.players) {
+          const s = g.seats[hp.seatIndex];
+          if (s) s.stack = hp.stack;
+        }
+
+        broadcastGameState(gameId);
+
+        if (isHandComplete(h)) {
+          handleHandComplete(gameId, h);
+        } else if (h.gameStatus === GAME_STATES.SHOWDOWN) {
+          startShowdownTimer(gameId);
+        } else if (isRoundComplete(h)) {
+          scheduleRunout(gameId, h);
+        } else {
+          setActionTimer(gameId);
+        }
+      }, botDelay);
+
+      actionTimers.set(gameId, timeout);
+      return;
+    }
+  }
+  // ── /BOTS ──
 
   // ── HUMAN TURN: Standard auto-fold timer ──
   const timerMs = (hand.actionTimer || 20) * 1000;
@@ -1059,6 +1243,8 @@ function setActionTimer(gameId) {
 
     if (isHandComplete(handNow)) {
       handleHandComplete(gameId, handNow);
+    } else if (handNow.gameStatus === GAME_STATES.SHOWDOWN) {
+      startShowdownTimer(gameId);
     } else if (isRoundComplete(handNow)) {
       scheduleRunout(gameId, handNow);
     } else {
@@ -1121,7 +1307,8 @@ function trackHandComplete(hand) {
   }
 
   hand.players.forEach(p => {
-    if (p.userId) {
+    // ── BOTS ── bots are not DB users — never track stats for them
+    if (p.userId && !BotPlayer.isBotUserId(p.userId)) {
       ChallengeTracker.trackStat(p.userId, 'handsPlayed', 1);
 
       HandStats.trackHand(p.userId, {
@@ -1138,7 +1325,7 @@ function trackHandComplete(hand) {
     }
   });
 
-  if (hand.winningUserId) {
+  if (hand.winningUserId && !BotPlayer.isBotUserId(hand.winningUserId)) {
     ChallengeTracker.trackStat(hand.winningUserId, 'handsWon', 1);
 
     if (hand.winningRank > 0) {
@@ -1159,7 +1346,7 @@ function trackHandComplete(hand) {
   if (hand.gameStatus === 'SHOWDOWN' || hand.gameStatus === 'HAND_COMPLETE') {
     const activePlayers = hand.players.filter(p => !p.isFolded);
     activePlayers.forEach(p => {
-      if (p.userId) {
+      if (p.userId && !BotPlayer.isBotUserId(p.userId)) {
         ChallengeTracker.trackStat(p.userId, 'showdownsReached', 1);
       }
     });
@@ -1183,14 +1370,15 @@ function cleanupSeat(game, seatIndex, seat, userId, gameId) {
   game.seats[seatIndex] = null;
   console.log(`[Cleanup] Seat ${seatIndex} cleared for ${seat.userName}`);
 
-  // If host left, reassign to another player or deactivate the table
+  // If host left, reassign to another HUMAN player or deactivate the table
+  // (bots can't host — they have no controls and no socket).
   if (seat.userId === game.hostId) {
-    const nextPlayer = game.seats.find(s => s && s.userId);
+    const nextPlayer = game.seats.find(s => s && s.userId && !BotPlayer.isBotUserId(s.userId));
     if (nextPlayer) {
       game.hostId = nextPlayer.userId;
       console.log(`[Host] New host for ${gameId}: ${nextPlayer.userName}`);
     } else {
-      // No players left — deactivate
+      // No human players left — deactivate
       deactivateGame(gameId);
       console.log(`[Game] ${gameId} deactivated (no players)`);
     }
@@ -1201,10 +1389,45 @@ function cleanupSeat(game, seatIndex, seat, userId, gameId) {
 // Hand Completion Helpers
 // ============================================================
 
-/** Check if any player is seated at the table. */
+/** Check if any HUMAN player is seated at the table (bots can't run a table alone). */
 function hasHumanPlayer(game) {
-  return game.seats.some(s => s && s.userId);
+  return game.seats.some(s => s && s.userId && !BotPlayer.isBotUserId(s.userId));
 }
+
+/**
+ * ── BOTS ── Remove busted bots (stack <= 0) from the table after a hand
+ * completes, so they actually leave the table when knocked out and their
+ * seats free up for humans. Returns the number of bots removed.
+ */
+function removeBustedBots(gameId) {
+  if (!BOTS_ENABLED) return 0;
+  const game = ringGames.get(gameId);
+  if (!game) return 0;
+
+  let removed = 0;
+  for (let i = 0; i < MAX_SEATS; i++) {
+    const seat = game.seats[i];
+    if (seat && BotPlayer.isBotUserId(seat.userId) && seat.stack <= 0) {
+      // Defensive: if the busted bot was somehow the host, hand it to a human
+      if (seat.userId === game.hostId) {
+        const nextHuman = game.seats.find(s => s && s.userId && !BotPlayer.isBotUserId(s.userId));
+        if (nextHuman) {
+          game.hostId = nextHuman.userId;
+          console.log(`[Host] New host for ${gameId}: ${nextHuman.userName}`);
+        }
+      }
+      game.seats[i] = null;
+      removed++;
+      console.log(`[Bots] "${seat.userName}" busted and left the table (seat ${i}) in game ${gameId}`);
+    }
+  }
+
+  if (removed > 0) {
+    broadcastTableState(gameId);
+  }
+  return removed;
+}
+// ── /BOTS ──
 
 /**
  * Deactivate a ring game: clear its timer, remove from memory,
@@ -1215,6 +1438,7 @@ function deactivateGame(gameId) {
   if (!g) return;
   clearActionTimer(gameId);
   clearRunoutTimer(gameId);
+  clearShowdownTimer(gameId);
   ringGames.delete(gameId);
   pool.query('UPDATE ring_games SET is_active = FALSE WHERE id = $1', [gameId])
     .catch(err => console.error('[DB] Error deactivating game:', err.message));
@@ -1227,6 +1451,9 @@ function deactivateGame(gameId) {
  * WAITING lobby. If no players remain, the table closes.
  */
 function handleHandComplete(gameId, hand) {
+  // No reveal timer should survive a completed hand.
+  clearShowdownTimer(gameId);
+
   trackHandComplete(hand);
 
   // Persist each player's current stack into their player_sessions row so
@@ -1277,7 +1504,12 @@ function handleHandComplete(gameId, hand) {
     players: hand.players.map(p => ({
       seatIndex: p.seatIndex,
       userName: p.userName,
-      holeCards: p.holeCards,
+      // Reveal policy: only the players whose cards are shown get their hole
+      // cards sent. Mucked losers and uncontested winners stay hidden — every
+      // client already knows its own cards from the private hole-card events.
+      holeCards: p.revealed ? p.holeCards : undefined,
+      mucked: p.mucked || false,
+      revealed: p.revealed || false,
       stack: p.stack,
     })),
   });
@@ -1288,6 +1520,12 @@ function handleHandComplete(gameId, hand) {
 
     // No runout should still be pending once the hand is complete.
     clearRunoutTimer(gameId);
+
+    // ── BOTS ── Busted bots leave the table now that the hand is over so
+    // their seats free up for humans. Their stacks were synced to the seats
+    // before this ran, so stack <= 0 means truly eliminated.
+    removeBustedBots(gameId);
+    // ── /BOTS ──
 
     // If no human players remain, close the table entirely
     if (!hasHumanPlayer(g)) {
@@ -1318,7 +1556,7 @@ function handleHandComplete(gameId, hand) {
       broadcastGameState(gameId);
       setActionTimer(gameId);
     }
-  }, 12000);
+  }, 6000);
 }
 
 function recordAction(gameId, seatIndex, action, amount) {
@@ -1465,6 +1703,7 @@ io.on('connection', (socket) => {
           isConnected: seat.isConnected,
           isHost: seat.userId === game.hostId,
           isSittingOut: seat.isSittingOut || false,
+          isBot: !!seat.isBot,
           userId: seat.userId,
         };
       });
@@ -1483,6 +1722,8 @@ io.on('connection', (socket) => {
         initialPlayers,
         gameState: game.gameState,
         hostId: game.hostId,
+        // ── BOTS ──
+        botsEnabled: BOTS_ENABLED,
       });
 
       broadcastTableState(gameId);
@@ -1727,6 +1968,9 @@ io.on('connection', (socket) => {
         lastActions.delete(gameId);
 
         handleHandComplete(gameId, hand);
+      } else if (game.currentHand.gameStatus === GAME_STATES.SHOWDOWN) {
+        // River betting is done — run the interactive showdown reveal phase.
+        startShowdownTimer(gameId);
       } else if (isRoundComplete(game.currentHand)) {
         // Every remaining player is all-in — deal the rest of the board one
         // street at a time so the runout is visible.
@@ -1739,6 +1983,58 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('[Player Action Error]', err);
       callback && callback({ error: 'Failed to process action' });
+    }
+  });
+
+  // ---------- SHOWDOWN DECISION (Show Cards / Muck) ----------
+  socket.on('showdown_decision', ({ gameId, show }, callback) => {
+    try {
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
+      }
+
+      const game = ringGames.get(gameId);
+      if (!game || !game.currentHand) {
+        return callback && callback({ error: 'No game in progress' });
+      }
+
+      const hand = game.currentHand;
+      if (hand.gameStatus !== GAME_STATES.SHOWDOWN || !hand.showdown || !hand.showdown.active) {
+        return callback && callback({ error: 'Not in showdown' });
+      }
+
+      const curSeat = hand.showdown.queue[hand.showdown.queuePos];
+      if (curSeat !== playerInfo.seatIndex) {
+        return callback && callback({ error: 'Not your turn to reveal' });
+      }
+
+      const result = applyShowdownDecision(hand, playerInfo.seatIndex, show !== false);
+      if (result.error) {
+        return callback && callback({ error: result.error });
+      }
+
+      const actingPlayer = hand.players.find(p => p.seatIndex === playerInfo.seatIndex);
+      console.log(`[Showdown] ${actingPlayer ? actingPlayer.userName : '?'} ${show !== false ? 'shows' : 'mucks'}`);
+
+      clearShowdownTimer(gameId);
+      game.gameState = hand.gameStatus;
+      for (const hp of hand.players) {
+        const seat = game.seats[hp.seatIndex];
+        if (seat) seat.stack = hp.stack;
+      }
+      broadcastGameState(gameId);
+
+      if (isHandComplete(hand)) {
+        handleHandComplete(gameId, hand);
+      } else {
+        startShowdownTimer(gameId);
+      }
+
+      callback && callback(null, { success: true });
+    } catch (err) {
+      console.error('[Showdown Decision Error]', err);
+      callback && callback({ error: 'Failed to process decision' });
     }
   });
 
@@ -1967,6 +2263,117 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ---------- ADD BOTS (host only, between hands) ----------
+  // ── BOTS ── Bots fill empty seats so a solo player can practice against
+  // the table while waiting for friends to join. Host-only and only allowed
+  // in the WAITING lobby (adding mid-hand would desync the dealt hand).
+  socket.on('add_bots', ({ gameId, count = 2 }, callback) => {
+    try {
+      if (!BOTS_ENABLED) {
+        return callback && callback({ error: 'Bots are disabled' });
+      }
+
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
+      }
+
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
+      }
+
+      if (socket.userId !== game.hostId) {
+        return callback && callback({ error: 'Only the host can add bots' });
+      }
+
+      if (game.gameState !== 'WAITING') {
+        return callback && callback({ error: 'Bots can only be added between hands' });
+      }
+
+      const countToAdd = Math.min(Math.max(parseInt(count) || 2, 1), MAX_SEATS);
+      const usedNames = game.seats.filter(Boolean).map(s => s.userName);
+      // Buy in for the MINIMUM so bot chips don't flood the table economy —
+      // a human grinding chips off bots shouldn't be able to mint max buy-ins.
+      const buyin = game.minBuyin;
+
+      let added = 0;
+      for (let i = 0; i < MAX_SEATS && added < countToAdd; i++) {
+        if (game.seats[i]) continue;
+        const botId = BotPlayer.generateBotId();
+        const botName = BotPlayer.getBotName(usedNames);
+        usedNames.push(botName);
+        game.seats[i] = {
+          userId: botId,
+          userName: botName,
+          stack: buyin,
+          isReady: true,
+          isConnected: true,
+          isSittingOut: false,
+          isBot: true,
+          sessionId: null,
+        };
+        added++;
+        console.log(`[Bots] "${botName}" joined ${game.tableName} (seat ${i}) with ${buyin} chips`);
+      }
+
+      if (added === 0) {
+        return callback && callback({ error: 'Table is full' });
+      }
+
+      broadcastTableState(gameId);
+      checkAutoStart(gameId);
+      callback && callback(null, { success: true, added });
+    } catch (err) {
+      console.error('[Add Bots Error]', err);
+      callback && callback({ error: 'Failed to add bots' });
+    }
+  });
+
+  // ---------- REMOVE BOTS (host only, between hands) ----------
+  socket.on('remove_bots', ({ gameId }, callback) => {
+    try {
+      if (!BOTS_ENABLED) {
+        return callback && callback({ error: 'Bots are disabled' });
+      }
+
+      const playerInfo = socketToPlayer.get(socket.id);
+      if (!playerInfo || playerInfo.gameId !== gameId) {
+        return callback && callback({ error: 'Not at this table' });
+      }
+
+      const game = ringGames.get(gameId);
+      if (!game) {
+        return callback && callback({ error: 'Table not found' });
+      }
+
+      if (socket.userId !== game.hostId) {
+        return callback && callback({ error: 'Only the host can remove bots' });
+      }
+
+      if (game.gameState !== 'WAITING') {
+        return callback && callback({ error: 'Bots can only be removed between hands' });
+      }
+
+      let removed = 0;
+      for (let i = 0; i < MAX_SEATS; i++) {
+        const seat = game.seats[i];
+        if (seat && BotPlayer.isBotUserId(seat.userId)) {
+          game.seats[i] = null;
+          removed++;
+          console.log(`[Bots] "${seat.userName}" removed from ${game.tableName} (seat ${i})`);
+        }
+      }
+
+      broadcastTableState(gameId);
+      callback && callback(null, { success: true, removed });
+    } catch (err) {
+      console.error('[Remove Bots Error]', err);
+      callback && callback({ error: 'Failed to remove bots' });
+    }
+  });
+  // ── /BOTS ──
+
   // ---------- DISCONNECT ----------
   socket.on('disconnect', () => {
     userIdToSocket.delete(socket.userId);
@@ -2036,6 +2443,8 @@ io.on('connection', (socket) => {
                       broadcastGameState(gameId);
                       if (isHandComplete(hand)) {
                         handleHandComplete(gameId, hand);
+                      } else if (hand.gameStatus === GAME_STATES.SHOWDOWN) {
+                        startShowdownTimer(gameId);
                       } else if (isRoundComplete(hand)) {
                         scheduleRunout(gameId, hand);
                       } else {
