@@ -902,7 +902,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         <div className="flex-1 flex items-center justify-center p-0.5 sm:p-2 min-h-0 landscape-table">
           {/* On mobile (<640px), use a 5:3 ratio to save vertical space.
               On desktop (>=640px), use the classic 4:3 ratio. */}
-          <div className="relative w-full max-h-full sm:aspect-[4/3] aspect-[5/3]" style={{ maxWidth: '800px', maxHeight: '100%' }}>
+          <div className="relative w-full max-h-full sm:aspect-[4/3] aspect-[5/3] felt-wrap" style={{ maxWidth: '800px', maxHeight: '100%' }}>
 
             {/* The Felt Table */}
             <div className="felt-table w-full h-full flex flex-col items-center justify-center relative overflow-hidden">
