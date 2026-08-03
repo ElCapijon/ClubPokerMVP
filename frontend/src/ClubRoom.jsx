@@ -52,6 +52,11 @@ function formatBetLabel(amt) {
 //   'lg'  → community cards     (50×72)
 //   'md'  → showdown reveal     (40×56)
 //   'sm'  → card backs (others) (32×46)
+//
+// NOTE: On mobile these sizes are overridden by the --card-* CSS variables
+// in src/mobile-overrides.css (they win via !important). If you change a
+// size here, update the matching :root defaults there too, or phones won't
+// pick up the change.
 const CARD_DIMENSIONS = {
   xl:  { w: 64, h: 90,  rank: 'text-lg',   suit: 'text-xl',  corner: 'text-[11px]' },
   lg:  { w: 50, h: 72,  rank: 'text-base',  suit: 'text-lg',  corner: 'text-[10px]' },

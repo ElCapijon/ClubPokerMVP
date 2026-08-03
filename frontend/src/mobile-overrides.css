@@ -1,0 +1,330 @@
+/* ================================================================
+   MOBILE OVERRIDES
+   All mobile-specific layout rules for the game (phones & small
+   screens). Imported AFTER index.css in src/main.jsx so these rules
+   override Tailwind utilities; they also use !important to beat the
+   inline card widths set by CARD_DIMENSIONS in ClubRoom.jsx.
+
+   Ordering note: later blocks win. The --card-* variable redefinitions
+   are laid out so portrait/landscape ALWAYS win over the tiny-screen
+   fallback below.
+   ================================================================ */
+
+/* ================================================================
+   CARD SIZE VARIABLES
+   Desktop defaults match CARD_DIMENSIONS in ClubRoom.jsx. The two
+   consumer rules below size hole cards and community cards from these
+   variables; each breakpoint further down only redefines the values,
+   so card sizes have ONE source of truth per breakpoint.
+   ================================================================ */
+:root {
+  --card-width-hole: 64px;
+  --card-height-hole: 90px;
+  --card-width-community: 50px;
+  --card-height-community: 72px;
+}
+
+/* Consumer rules — exist only to override the inline widths set by
+   CARD_DIMENSIONS in ClubRoom.jsx. Actual sizes come from the vars. */
+.landscape-hole-cards .card-front,
+.landscape-hole-cards .card-back {
+  width: var(--card-width-hole) !important;
+  height: var(--card-height-hole) !important;
+}
+.community-row .card-front,
+.community-row .card-back {
+  width: var(--card-width-community) !important;
+  height: var(--card-height-community) !important;
+}
+
+/* Touch-friendly: increase hit targets on mobile */
+@media (max-width: 640px) {
+  .action-btn-fold,
+  .action-btn-check,
+  .action-btn-call,
+  .preset-btn {
+    min-height: 36px;
+  }
+
+  .bet-slider::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+  }
+
+  .bet-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+/* Prevent layout shift on iOS */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ================================================================
+   MOBILE HEIGHT FIX
+   Use dynamic viewport height (dvh) on mobile to account for
+   browser chrome (address bar, bottom nav bar).
+   ================================================================ */
+/* Small viewport height = the area always visible on mobile even with the
+   address bar / bottom nav expanded. Using svh (instead of vh) keeps the
+   whole game — table + controls — inside the visible area, so the action
+   bar never has to scroll internally on phones. */
+@supports (height: 100svh) {
+  .min-h-screen-mobile {
+    min-height: 100svh !important;
+  }
+  .h-screen-mobile {
+    height: 100svh !important;
+  }
+}
+
+/* Fallback for browsers that don't support svh yet */
+@supports not (height: 100svh) {
+  .min-h-screen-mobile {
+    min-height: 100vh !important;
+  }
+  .h-screen-mobile {
+    height: 100vh !important;
+  }
+}
+
+/* Smaller card sizes on very small screens */
+@media (max-width: 380px) {
+  :root {
+    /* Tiny-screen fallback — normally overridden by the portrait and
+       landscape blocks below (they come later and win). */
+    --card-width-hole: 52px;
+    --card-height-hole: 74px;
+  }
+
+  .felt-table {
+    border-width: 8px !important;
+  }
+}
+
+/* ================================================================
+   PORTRAIT PHONES — make the table as BIG as possible while still
+   fitting the screen with no scrolling.
+   The racetrack table stands VERTICAL (height-driven 4:5 stadium,
+   straight sides left/right, rounded caps top/bottom). The felt fills
+   100% of the table row, so every pixel saved in the controls below
+   makes the table bigger. Community cards are 'md' sized and the
+   controls are compacted so header + table + controls all fit.
+   ================================================================ */
+@media (orientation: portrait) and (max-width: 639px) {
+  /* Size the felt by HEIGHT and derive width from the 4:5 ratio, so the
+     vertical racetrack fills the row without overflowing it. */
+  .felt-wrap {
+    width: auto !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    aspect-ratio: 4 / 5 !important;
+  }
+
+  /* Give the table more height: hide the last-action ticker on portrait
+     phones (it only reappears on larger screens). */
+  .landscape-controls .last-action-bar {
+    display: none !important;
+  }
+
+  /* Compact your hole cards a touch so the controls take less height
+     and the table grows. */
+  :root {
+    --card-width-hole: 44px;
+    --card-height-hole: 64px;
+  }
+  .landscape-hole-cards .card-front .text-lg,
+  .landscape-hole-cards .card-front .text-xl {
+    font-size: 16px !important;
+  }
+  .landscape-hole-cards .card-front .text-\[11px\] {
+    font-size: 10px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Compact action buttons so the row fits beside the bet controls */
+  .landscape-controls .action-btn-fold,
+  .landscape-controls .action-btn-check,
+  .landscape-controls .action-btn-call {
+    padding: 6px 12px !important;
+    font-size: 11px !important;
+    min-height: 32px !important;
+  }
+
+  /* Compact preset chips */
+  .landscape-controls .preset-btn {
+    padding: 3px 6px !important;
+    font-size: 9px !important;
+    min-height: 26px !important;
+  }
+
+  /* Slimmer bet slider row so it never wraps to three lines */
+  .landscape-controls .bet-slider {
+    width: 64px !important;
+  }
+  .landscape-controls .bet-slider-container {
+    gap: 4px !important;
+  }
+
+  /* Compact pot + street pills so they never overlap the seats */
+  .felt-table .pot-pill,
+  .felt-table .street-pill {
+    font-size: 10px !important;
+    padding: 2px 8px !important;
+  }
+  .felt-table .pot-pill span {
+    font-size: 11px !important;
+  }
+
+  /* Community card placeholders: smaller (md sized) so the row stays
+     inside the felt instead of colliding with the side seats */
+  .community-row {
+    gap: 3px !important;
+    margin-bottom: 4px !important;
+  }
+  :root {
+    --card-width-community: 38px;
+    --card-height-community: 54px;
+  }
+  .community-row .card-front .text-base,
+  .community-row .card-front .text-lg {
+    font-size: 13px !important;
+  }
+  .community-row .card-front .text-\[10px\] {
+    font-size: 8px !important;
+  }
+}
+
+/* ================================================================
+   LANDSCAPE MODE (mobile rotated)
+   Keep the portrait-style vertical stack: the table stays on top and the
+   action controls become a FULL-WIDTH bar at the bottom of the screen —
+   never a right-hand column. Landscape only tightens things up so it all
+   fits in the shorter height.
+
+   Threshold: 700px so phones whose layout viewport is taller than the
+   visible area (browser chrome) still get the compact landscape layout
+   instead of the full-size portrait bar sideways.
+   ================================================================ */
+@media (orientation: landscape) and (max-height: 700px) {
+  /* Table takes the top area (base classes already give it flex-1) */
+  .landscape-table {
+    flex: 1 1 auto !important;
+  }
+
+  /* The felt is HEIGHT-driven in landscape too (height:100% of the row,
+     width derived from the 2:1 ratio). Because it can only ever be as
+     big as the space left after the controls, the table + controls ALWAYS
+     fit on screen — no scrolling, no matter how short the viewport. */
+  .landscape-table .felt-wrap {
+    width: auto !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    aspect-ratio: 2 / 1 !important;
+  }
+
+  /* Controls: full-width bottom bar. Never shrinks below its content and
+     never scrolls — the table absorbs leftover space instead, so the
+     action buttons are ALWAYS fully visible. */
+  .landscape-controls {
+    flex: 0 0 auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border-top: 1px solid rgba(255,255,255,0.08) !important;
+    border-left: none !important;
+    padding: 4px 8px !important;
+  }
+
+  /* Keep YOUR hole cards visible in landscape, just compact */
+  .landscape-hole-cards {
+    gap: 4px !important;
+  }
+  :root {
+    --card-width-hole: 36px;
+    --card-height-hole: 52px;
+  }
+  .landscape-hole-cards .card-front .text-lg,
+  .landscape-hole-cards .card-front .text-xl {
+    font-size: 15px !important;
+  }
+  .landscape-hole-cards .card-front .text-\[11px\] {
+    font-size: 9px !important;
+  }
+
+  /* Reduce table border width */
+  .landscape-table .felt-table {
+    border-width: 6px !important;
+  }
+
+  /* Smaller community card gap */
+  .landscape-table .community-row {
+    gap: 3px !important;
+    margin-bottom: 3px !important;
+  }
+
+  /* Community cards shrink so the row never reaches the side seats */
+  :root {
+    --card-width-community: 32px;
+    --card-height-community: 46px;
+  }
+  .landscape-table .community-row .card-front .text-base,
+  .landscape-table .community-row .card-front .text-lg {
+    font-size: 12px !important;
+  }
+
+  /* Pot + street share one compact row in the center of the felt */
+  .landscape-table .pot-street-row {
+    gap: 4px !important;
+  }
+  .landscape-table .pot-pill,
+  .landscape-table .street-pill {
+    font-size: 9px !important;
+    padding: 1px 7px !important;
+  }
+  .landscape-table .pot-pill span {
+    font-size: 10px !important;
+  }
+
+  /* Make action buttons more compact */
+  .landscape-controls .action-btn-fold,
+  .landscape-controls .action-btn-check,
+  .landscape-controls .action-btn-call {
+    padding: 4px 8px !important;
+    font-size: 10px !important;
+    min-height: 28px !important;
+  }
+
+  /* Hide the last-action ticker in landscape — it wastes a whole row on
+     a short screen. The action buttons are what matter. */
+  .landscape-controls .last-action-bar {
+    display: none !important;
+  }
+
+  /* Keep the bet controls VISIBLE in landscape (hiding the whole container
+     also hid the Raise/All-In buttons — players could not bet sideways).
+     Only hide the range slider; presets + Raise + All-In stay. */
+  .landscape-controls .bet-slider {
+    display: none !important;
+  }
+  .landscape-controls .bet-slider-container {
+    gap: 4px !important;
+  }
+
+  /* Make preset buttons more compact */
+  .landscape-controls .preset-btn {
+    padding: 3px 6px !important;
+    font-size: 9px !important;
+    min-height: 26px !important;
+  }
+
+  /* Compact the Raise / All-In buttons too */
+  .landscape-controls .bet-slider-container .btn-raise,
+  .landscape-controls .bet-slider-container .btn-allin {
+    padding: 4px 10px !important;
+    font-size: 10px !important;
+    min-height: 28px !important;
+  }
+}
