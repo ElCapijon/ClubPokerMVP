@@ -22,6 +22,8 @@
   --card-height-hole: 90px;
   --card-width-community: 50px;
   --card-height-community: 72px;
+  --card-width-hero-seat: 40px;
+  --card-height-hero-seat: 56px;
 }
 
 /* Consumer rules — exist only to override the inline widths set by
@@ -35,6 +37,15 @@
 .community-row .card-back {
   width: var(--card-width-community) !important;
   height: var(--card-height-community) !important;
+}
+
+/* YOUR hole cards now render on the felt at your seat (the bottom bar only
+   keeps them on landscape phones). Sized from their own variables so each
+   breakpoint can shrink them to fit between the seat and the pot. */
+.hero-seat-cards .card-front,
+.hero-seat-cards .card-back {
+  width: var(--card-width-hero-seat) !important;
+  height: var(--card-height-hero-seat) !important;
 }
 
 /* Touch-friendly: increase hit targets on mobile */
@@ -188,6 +199,10 @@ html {
   :root {
     --card-width-community: 38px;
     --card-height-community: 54px;
+    /* Your seat cards shrink too — the portrait felt is narrow, so they
+       sit tight between the seat column and the community cards */
+    --card-width-hero-seat: 30px;
+    --card-height-hero-seat: 44px;
   }
   .community-row .card-front .text-base,
   .community-row .card-front .text-lg {
@@ -195,6 +210,16 @@ html {
   }
   .community-row .card-front .text-\[10px\] {
     font-size: 8px !important;
+  }
+  /* Smaller rank fonts on the seat cards so the corners stay readable */
+  .hero-seat-cards .card-front .text-xs {
+    font-size: 10px !important;
+  }
+  .hero-seat-cards .card-front .text-sm {
+    font-size: 11px !important;
+  }
+  .hero-seat-cards .card-front .text-\[8px\] {
+    font-size: 7px !important;
   }
 }
 
@@ -205,11 +230,13 @@ html {
    never a right-hand column. Landscape only tightens things up so it all
    fits in the shorter height.
 
-   Threshold: 700px so phones whose layout viewport is taller than the
-   visible area (browser chrome) still get the compact landscape layout
-   instead of the full-size portrait bar sideways.
+   Thresholds: max-height 700px so phones whose layout viewport is taller
+   than the visible area (browser chrome) still get the compact landscape
+   layout instead of the full-size portrait bar sideways. max-width 1024px
+   keeps this scoped to phones/tablets — short desktop windows keep the
+   full 4:3 desktop table and the bet slider.
    ================================================================ */
-@media (orientation: landscape) and (max-height: 700px) {
+@media (orientation: landscape) and (max-height: 700px) and (max-width: 1024px) {
   /* Table takes the top area (base classes already give it flex-1) */
   .landscape-table {
     flex: 1 1 auto !important;
@@ -326,5 +353,18 @@ html {
     padding: 4px 10px !important;
     font-size: 10px !important;
     min-height: 28px !important;
+  }
+}
+
+/* Tiny screens — shrink the seat cards last so this wins over the 640px
+   block above (the felt is narrowest here, so the cards have to be smallest).
+   The community row is also shrunk a notch so it stops short of the side
+   seats, keeping the hero's seat cards clear of the board. */
+@media (max-width: 380px) {
+  :root {
+    --card-width-hero-seat: 26px;
+    --card-height-hero-seat: 38px;
+    --card-width-community: 32px;
+    --card-height-community: 46px;
   }
 }

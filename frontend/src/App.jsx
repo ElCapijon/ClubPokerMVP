@@ -262,7 +262,6 @@ export default function App() {
           clubData={gameData}
           displayName={displayName}
           onLeave={handleLeaveClub}
-          onLogout={handleLogout}
         />
         <ProgressPanel />
       </>

@@ -4,8 +4,6 @@ import { getToken } from './auth';
 
 const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:3000');
 
-const MAX_SEATS = 6;
-
 // Seat positions for the racetrack (stadium) table, clockwise from
 // bottom-center. The stadium hugs the rail in any orientation: horizontal
 // on desktop/landscape (rounded ends left/right), vertical in portrait
@@ -147,13 +145,49 @@ function useIsMobile() {
   return isMobile;
 }
 
+// True on phones held sideways (the compact landscape layout). The flat 2:1
+// felt is too short to host your hole cards at the seat, so there they stay
+// in the compact bottom bar instead (mirrors the landscape CSS breakpoint).
+function useIsLandscapePhone() {
+  const [isLandscape, setIsLandscape] = useState(() =>
+    window.matchMedia('(orientation: landscape) and (max-height: 700px) and (max-width: 1024px)').matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(orientation: landscape) and (max-height: 700px) and (max-width: 1024px)');
+    const onChange = (e) => setIsLandscape(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return isLandscape;
+}
+
+// Where YOUR hole cards sit on the felt while you are seated. They render on
+// the line between your seat and the pot so they read like your hand sitting
+// in front of you, and they clear everything already on the felt:
+//   - center seats (0/3): straight up/down toward the middle, pushed 55% of
+//     the way so they sit above the bet chip (which stops at 30%) and below
+//     the pot pill
+//   - side seats (1/2/4/5): at table-center height, offset to the INSIDE of
+//     the seat so they clear the seat column on one side and the community
+//     cards on the other
+function getHeroCardPos(index, isMobile) {
+  const isCenter = index === 0 || index === 3;
+  if (isCenter) {
+    const pos = SEAT_POSITIONS[index];
+    return { top: pos.top + (50 - pos.top) * 0.55, left: 50 };
+  }
+  const isLeft = index === 1 || index === 2;
+  return { top: 50, left: isLeft ? (isMobile ? 19 : 22) : (isMobile ? 81 : 78) };
+}
+
 // ====================================================================
 // MAIN COMPONENT
 // ====================================================================
-export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
-  const { gameId = clubData.clubId, tableName = 'Poker Table', userId, seatIndex: mySeatIndex, buyinAmount, initialPlayers } = clubData;
+export default function ClubRoom({ clubData, displayName, onLeave }) {
+  const { gameId = clubData.clubId, userId, seatIndex: mySeatIndex, initialPlayers } = clubData;
   const clubId = gameId;
   const isMobile = useIsMobile();
+  const isLandscapePhone = useIsLandscapePhone();
   const [players, setPlayers] = useState(initialPlayers || Array(6).fill(null));
   const [gameState, setGameState] = useState(clubData.gameState || 'WAITING');
   const [isConnected, setIsConnected] = useState(true);
@@ -768,8 +802,36 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   // =============================================================
   // RENDER
   // =============================================================
+  // h-screen-mobile (NOT min-h) gives the root a DEFINITE height, which lets
+  // the felt's height:100% chain resolve. With only min-height the container
+  // is auto-height and the felt collapses instead of filling.
   return (
-    <div className="min-h-screen-mobile bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 flex flex-col overflow-hidden select-none">
+    <div className="h-screen-mobile bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 flex flex-col overflow-hidden select-none relative">
+
+      {/* ── Floating Leave button ──
+          The old header bar was removed so the table gets the full screen
+          height; Leave and Cash Out now float over the table corners. */}
+      <button onClick={handleLeaveTable}
+        className="absolute top-2 left-2 z-40 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-full
+                   bg-gray-900/70 backdrop-blur-sm border border-gray-700/60 text-gray-300
+                   hover:text-white hover:bg-gray-800/80 transition-all duration-200 active:scale-95"
+        title="Leave Table">
+        <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+        </svg>
+      </button>
+
+      {/* ── Floating Cash Out button (top-right) ── */}
+      {gameState !== 'WAITING' && myPlayerData && myPlayerData.stack > 0 && (
+        <button onClick={() => setShowCashOut(true)}
+          className="absolute top-2 right-2 z-40 px-2.5 sm:px-3 py-1.5 sm:py-2
+                     bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-full
+                     text-[10px] sm:text-xs font-bold shadow-lg shadow-emerald-600/30
+                     hover:from-emerald-500 hover:to-emerald-400 transition-all active:scale-95"
+          title="Cash Out">
+          Cash Out
+        </button>
+      )}
 
       {/* ── Connection Banner ── */}
       {!isConnected && (
@@ -870,44 +932,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         </div>
       )}
 
-      {/* ── Header Bar ── */}
-      <header className="bg-gray-900/80 backdrop-blur-sm border-b border-gray-800 px-2 sm:px-4 py-1.5 sm:py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <button onClick={handleLeaveTable}
-            className="text-gray-400 hover:text-white transition-colors p-1.5 -ml-1.5 shrink-0"
-            title="Leave Table">
-            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-          </button>
-          <div className="min-w-0">
-            <h2 className="text-xs sm:text-sm font-semibold text-white truncate">{tableName}</h2>
-            <p className="text-[10px] sm:text-xs text-gray-500 truncate">
-              {connectedPlayers.length}/{MAX_SEATS} players
-              {handCount > 0 && <span className="ml-1 sm:ml-2">· Hand #{handCount}</span>}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Cash Out button when game is not waiting */}
-          {gameState !== 'WAITING' && myPlayerData && myPlayerData.stack > 0 && (
-            <button onClick={() => setShowCashOut(true)}
-              className="px-2 sm:px-3 py-1 sm:py-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-lg text-[10px] sm:text-xs font-bold
-                         hover:from-emerald-500 hover:to-emerald-400 transition-all active:scale-95 shadow-lg shadow-emerald-600/20">
-              Cash Out
-            </button>
-          )}
-          <button onClick={onLogout}
-            className="text-gray-500 hover:text-gray-300 transition-colors p-1.5 shrink-0"
-            title="Logout">
-            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-          </button>
-        </div>
-      </header>
-
       {/* ==============================================================
           MAIN GAME AREA — Two-row layout: Table on top, Cards + Controls below
           In landscape mode (orientation:landscape + max-height:500px), switches
@@ -917,10 +941,15 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
         {/* ── TOP ROW: Table + Players ── */}
         <div className="flex-1 flex items-center justify-center p-0.5 sm:p-2 min-h-0 landscape-table">
-          {/* On mobile (<640px), use a flatter 2:1 oval so the whole game
-              fits the screen height without scrolling.
-              On desktop (>=640px), use the classic 4:3 ratio. */}
-          <div className="relative w-full max-h-full sm:aspect-[4/3] aspect-[2/1] felt-wrap" style={{ maxWidth: '800px', maxHeight: '100%' }}>
+          {/* The felt is HEIGHT-driven in every context: height:100% of the
+              table row, width derived from the aspect-ratio below (capped at
+              max-w-full / 800px). It can therefore never overflow the row —
+              if the viewport shrinks, the table shrinks with it instead of
+              pushing the controls off-screen.
+              - mobile portrait: 4/5 vertical stadium (override in mobile-overrides.css)
+              - mobile landscape: 2/1 flat oval (override)
+              - desktop/tablet: 4/3 via sm:aspect-[4/3] */}
+          <div className="relative h-full max-w-full sm:aspect-[4/3] aspect-[2/1] felt-wrap" style={{ maxWidth: '800px', maxHeight: '100%' }}>
 
             {/* The Felt Table */}
             <div className="felt-table w-full h-full flex flex-col items-center justify-center relative overflow-hidden">
@@ -962,9 +991,17 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                 </div>
               )}
 
-              {/* ── Waiting indicator ── */}
+              {/* ── Waiting state — uses the felt space so the table never
+                   looks empty before a hand starts ── */}
               {gameState === 'WAITING' && (
-                <div className="mt-2 text-xs text-gray-500 animate-pulse z-10">Waiting for players...</div>
+                <div className="flex flex-col items-center gap-1.5 z-10 text-center">
+                  <p className="text-xl sm:text-3xl font-display font-semibold text-white/90 animate-pulse">
+                    Waiting for players…
+                  </p>
+                  <p className="text-[10px] sm:text-sm text-gray-400/90">
+                    {players.filter(p => p !== null && p.isReady).length}/{players.filter(p => p !== null).length} players ready
+                  </p>
+                </div>
               )}
             </div> {/* end felt-table */}
 
@@ -992,6 +1029,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               const isActiveTurn = index === currentPlayerSeatIndex;
               const isDealer = index === dealerSeatIndex;
               const chipPos = BET_CHIP_POSITIONS[index];
+              const heroCardPos = isMe ? getHeroCardPos(index, isMobile) : null;
               // Readable, adaptive bet chip: abbreviate large amounts (e.g. $1.2K,
               // $2.5M) and only scale the font down slightly, so big bets stay
               // crisp and legible instead of being clipped inside a fixed circle.
@@ -1123,6 +1161,27 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                     </div>
                   </div>
                 </div>
+
+                {/* YOUR hole cards — rendered on the felt at your seat
+                    (between the seat and the pot) so the bottom action bar
+                    stays small. Fan + gold glow so your hand reads clearly
+                    against the felt; on landscape phones they fall back to
+                    the compact bottom bar (no room on the flat 2:1 felt). */}
+                {isMe && !isLandscapePhone && myPlayerData && gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
+                  <div className="absolute -translate-x-1/2 -translate-y-1/2 z-10 hero-seat-cards pointer-events-none"
+                    style={{ top: `${heroCardPos.top}%`, left: `${heroCardPos.left}%` }}
+                  >
+                    <div className={`flex items-end gap-0.5 sm:gap-1 transition-transform duration-300 ${isActiveTurn ? 'scale-110' : ''}`}
+                      style={{ filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.5))' }}
+                    >
+                      {holeCards.map((card, i) => (
+                        <div key={i} style={{ transform: `rotate(${i === 0 ? -5 : 5}deg)`, zIndex: i }}>
+                          <Card card={card} faceDown={false} size={isMobile ? 'sm' : 'md'} dealDelay={i} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </React.Fragment>
             );
             })}              {/* ── Flying bet chips (seat → pot / winner) ── */}
@@ -1179,8 +1238,10 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               </div>
             )}
 
-            {/* ── Your Hole Cards (BIG — separate from seat) ── */}
-            {gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
+            {/* ── Your Hole Cards — compact bottom bar, ONLY on landscape
+                 phones. Everywhere else they render on the felt at your seat
+                 (see the seat map) so this bar stays small. ── */}
+            {isLandscapePhone && gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
               <div className="flex items-center justify-center gap-1.5 sm:gap-3 py-0.5 sm:py-1 landscape-hole-cards">
                 {holeCards.map((card, i) => (
                   <Card key={i} card={card} faceDown={false} size={isMobile ? 'lg' : 'xl'} dealDelay={i} />
@@ -1189,16 +1250,6 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                   <div className="flex items-center gap-1.5 sm:gap-3 ml-1 sm:ml-3 text-[10px] sm:text-sm">
                     <span className="text-gray-400 hidden sm:inline">Stack:</span>
                     <span className="text-poker-gold font-bold font-mono">${myPlayerData.stack?.toLocaleString() || 0}</span>
-                  </div>
-                )}
-                {displayTimer > 0 && isMyTurn && (
-                  <div className={`flex items-center gap-1 px-1.5 sm:px-3 py-0.5 sm:py-1 rounded-full text-[10px] sm:text-sm font-bold ${
-                    displayTimer <= 5 ? 'bg-red-900/70 text-red-300 animate-pulse' : 'bg-gray-800 text-gray-200'
-                  }`}>
-                    <svg className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    {displayTimer}s
                   </div>
                 )}
               </div>
@@ -1329,6 +1380,19 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
               {/* ===================== IN-GAME CONTROLS ===================== */}
               {gameState !== 'WAITING' && gameState !== 'SHOWDOWN' && gameState !== 'HAND_COMPLETE' && (
                 <>
+                  {/* Your-turn countdown — lives next to the action buttons
+                      now that the cards are on the felt, not in this bar */}
+                  {displayTimer > 0 && isMyTurn && (
+                    <div className={`flex items-center gap-1 px-2 sm:px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold ${
+                      displayTimer <= 5 ? 'bg-red-900/70 text-red-300 animate-pulse' : 'bg-gray-800 text-gray-200'
+                    }`}>
+                      <svg className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      {displayTimer}s
+                    </div>
+                  )}
+
                   {/* ── Main action buttons — hidden while the board is
                        running out (no live opponent) or you are all-in/folded ── */}
                   {showMainActions && (

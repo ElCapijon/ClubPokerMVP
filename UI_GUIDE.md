@@ -74,13 +74,12 @@ Every full-screen page root is:
 <div className="min-h-screen-mobile bg-gradient-to-b from-gray-950 via-gray-900 to-gray-950 flex flex-col overflow-hidden">
 ```
 
-Inside the **club room**, the body is split into three zones:
+Inside the **club room**, the body is split into **two zones** (there is no header bar — the old one was removed so the table gets the full screen height):
 
 ```
 ┌─────────────────────────────────────┐
-│ header (shrink-0, never moves)      │  ← table name, Cash Out, logout
-├─────────────────────────────────────┤
-│                                     │
+│  (Leave)  ← floating top-left       │  ← Leave + Cash Out are absolute
+│  (Cash Out) floating top-right      │    overlays on the root (which is `relative`)
 │  TABLE ZONE  (flex-1 min-h-0)       │  ← absorbs ALL leftover space
 │  ┌───────────────────────────────┐  │
 │  │ felt-wrap (height:100%)       │  │
@@ -88,8 +87,8 @@ Inside the **club room**, the body is split into three zones:
 │  └───────────────────────────────┘  │
 │                                     │
 ├─────────────────────────────────────┤
-│ action bar (shrink-0, never grows)  │  ← hole cards + Fold/Check/Call + bet slider
-└─────────────────────────────────────┘
+│ action bar (shrink-0, never grows)  │  ← Fold/Check/Call + bet slider (your hole
+└─────────────────────────────────────┘    cards live on the felt at your seat — §7)
 ```
 
 ```jsx
@@ -123,8 +122,9 @@ Mobile browser chrome (address bar, bottom nav) means `100vh` is *taller than th
 ```
 
 - **`svh`** = small viewport height = the area that's *always* visible even with the browser UI expanded.
-- **Always use `min-h-screen-mobile`** (not `min-h-screen`, not `h-screen`, not `100vh`) on any new full-screen page.
-- If you see a page that scrolls or clips the bottom on a phone, the first suspect is a plain `vh`/`h-screen` somewhere.
+- **Use `h-screen-mobile` (definite height) on the club room** — the game screen must have a *definite* height or the felt's `height: 100%` chain silently fails to resolve (a `min-height` container is auto-height). **Use `min-h-screen-mobile` on the scrolling screens** (auth, lobby, reconnecting).
+- Never use plain `vh`/`h-screen` — they reintroduce the iOS address-bar bug instantly.
+- If a page scrolls or clips the bottom on a phone, check for a plain `vh`/`h-screen` — or a `min-height` root on a screen that needs a definite height.
 
 ### 4.3 The felt table: shape driven by `aspect-ratio` + `height:100%`
 
@@ -135,6 +135,16 @@ The table is a **racetrack / stadium shape** (`border-radius: 9999px` makes the 
 | Desktop (≥ 640px) | `4 / 3` (Tailwind `sm:aspect-[4/3]`) | horizontal oval |
 | **Mobile portrait** (`orientation:portrait`, ≤ 639px) | `4 / 5` — **vertical stadium**, stands tall | vertical oval |
 | **Mobile landscape** (`orientation:landscape`, ≤ 700px height) | `2 / 1` — flat oval | flat oval |
+
+The **base** classes are also height-driven — `h-full max-w-full` (NOT `w-full max-h-full`, which would be width-driven and clamp the height on short screens):
+
+```jsx
+// ClubRoom.jsx — the felt is height-driven in EVERY context
+<div className="relative h-full max-w-full sm:aspect-[4/3] aspect-[2/1] felt-wrap"
+     style={{ maxWidth: '800px', maxHeight: '100%' }}>
+```
+
+The mobile blocks below only change the **ratio** (they override the base with `width: auto; height: 100%; max-width: 100%; aspect-ratio: …` — all `!important`):
 
 ```css
 /* mobile-overrides.css — portrait phones */
@@ -157,7 +167,7 @@ The table is a **racetrack / stadium shape** (`border-radius: 9999px` makes the 
 }
 ```
 
-**Why it never overflows:** the felt's height is a percentage of its row (which is `flex-1 min-h-0`, i.e. "whatever is left after the controls"). Width follows from the ratio and is capped at `max-width: 100%`. So *regardless of how short the viewport is*, the table shrinks to fit — there is no scroll, ever.
+**Why it never overflows:** the felt's height is a percentage of its row (which is `flex-1 min-h-0`, i.e. "whatever is left after the controls"). Width follows from the ratio and is capped at `max-width: 100%` (or the 800px inline cap on desktop). So *regardless of how short the viewport is*, the table shrinks to fit — there is no scroll, ever. Trade-off: on very tall windows the width cap (800px) can be reached before the ratio fills the height, so the felt grows taller instead of staying 4:3 — it never overflows, it just fills.
 
 > ⚠️ When the felt shape changes (4/5 ↔ 2/1 ↔ 4/3), the **seats automatically re-map** because they're positioned in *percentages* of the felt — see §6.
 
@@ -170,9 +180,9 @@ There are **four** breakpoint blocks in `frontend/src/mobile-overrides.css` (plu
 | # | Breakpoint | CSS selector | Purpose |
 |---|---|---|---|
 | 1 | `max-width: 640px` | `@media (max-width: 640px)` (mobile-overrides.css) | Touch targets: buttons ≥ 36px, slider thumb 18px |
-| 2 | `max-width: 380px` | `@media (max-width: 380px)` (mobile-overrides.css) | Tiny phones: slimmer rail (8px), smaller hole cards (52×74 fallback) |
-| 3 | **Portrait phones** | `@media (orientation: portrait) and (max-width: 639px)` (mobile-overrides.css) | Stand the table **vertical** (4/5), hide last-action ticker, compact hole cards (44×64) |
-| 4 | **Landscape phones** | `@media (orientation: landscape) and (max-height: 700px)` (mobile-overrides.css) | Compact bottom bar: flat table (2/1), 6px rail, tiny cards, slider hidden |
+| 2 | `max-width: 380px` | `@media (max-width: 380px)` (mobile-overrides.css) | Tiny phones: slimmer rail (8px), smallest seat cards (26×38) + community (32×46) |
+| 3 | **Portrait phones** | `@media (orientation: portrait) and (max-width: 639px)` (mobile-overrides.css) | Stand the table **vertical** (4/5), hide last-action ticker, compact seat cards (30×44) |
+| 4 | **Landscape phones/tablets** | `@media (orientation: landscape) and (max-height: 700px) and (max-width: 1024px)` (mobile-overrides.css) | Compact bottom bar: flat table (2/1), 6px rail, tiny cards, slider hidden. The `max-width: 1024px` keeps short **desktop** windows on the full 4:3 table with the slider |
 
 **And the JS hook** in `ClubRoom.jsx`:
 
@@ -186,7 +196,13 @@ function useIsMobile() {
 
 It's used for:
 - community cards: `size={isMobile ? 'md' : 'lg'}`
-- your hole cards: `size={isMobile ? 'lg' : 'xl'}`
+- your seat cards (on the felt): `size={isMobile ? 'sm' : 'md'}`
+- the landscape-phone bottom-bar hole cards only: `size={isMobile ? 'lg' : 'xl'}`
+
+A second hook, `useIsLandscapePhone()` (same media query as the landscape CSS
+block), decides **where your hole cards render**: on the felt at your seat on
+desktop/portrait, or in the compact bottom bar on landscape phones where the
+flat 2:1 felt has no room.
 
 > ⚠️ **The 700px landscape threshold is deliberate.** The CSS comment explains: phones whose *layout viewport is taller than the visible area* (due to browser chrome) still get the compact landscape layout instead of the full-size portrait bar displayed sideways. Don't "clean it up" to 500px.
 
@@ -202,9 +218,9 @@ Base sizes come from `CARD_DIMENSIONS` in `ClubRoom.jsx`:
 
 ```js
 const CARD_DIMENSIONS = {
-  xl: { w: 64, h: 90, ... },  // your hole cards (desktop)
+  xl: { w: 64, h: 90, ... },  // hole cards in the landscape-phone bottom bar
   lg: { w: 50, h: 72, ... },  // community cards (desktop)
-  md: { w: 40, h: 56, ... },  // community cards (mobile) — then CSS shrinks further
+  md: { w: 40, h: 56, ... },  // your seat cards (desktop) — then CSS shrinks further
   sm: { w: 32, h: 46, ... },  // seat card backs
 };
 ```
@@ -213,7 +229,8 @@ const CARD_DIMENSIONS = {
 
 | Context | Desktop | Mobile portrait | Mobile landscape |
 |---|---|---|---|
-| Your hole cards (`.landscape-hole-cards`) | xl — 64×90 | **44×64** | **36×52** |
+| Your seat cards (`.hero-seat-cards`, on the felt) | md — 40×56 | **30×44** | *(not on the felt)* |
+| Your hole cards (`.landscape-hole-cards`, bottom bar) | *(not in the bar)* | *(not in the bar)* | **36×52** |
 | Community cards (`.community-row`) | lg — 50×72 | **38×54** | **32×46** |
 | Seat card backs | sm — 32×46 | 32×46 | 32×46 |
 
@@ -221,8 +238,9 @@ const CARD_DIMENSIONS = {
 
 ```css
 :root {
-  --card-width-hole: 64px;        --card-height-hole: 90px;      /* desktop defaults, match CARD_DIMENSIONS */
+  --card-width-hole: 64px;        --card-height-hole: 90px;      /* landscape-phone bottom bar only */
   --card-width-community: 50px;   --card-height-community: 72px;
+  --card-width-hero-seat: 40px;   --card-height-hero-seat: 56px; /* your cards on the felt */
 }
 /* Consumer rules — only exist to beat the inline CARD_DIMENSIONS sizes: */
 .landscape-hole-cards .card-front, .landscape-hole-cards .card-back {
@@ -230,6 +248,9 @@ const CARD_DIMENSIONS = {
 }
 .community-row .card-front, .community-row .card-back {
   width: var(--card-width-community) !important;  height: var(--card-height-community) !important;
+}
+.hero-seat-cards .card-front, .hero-seat-cards .card-back {
+  width: var(--card-width-hero-seat) !important;  height: var(--card-height-hero-seat) !important;
 }
 /* Each breakpoint only redefines the variables — no px in selectors anymore: */
 @media (orientation: portrait) and (max-width: 639px) {
@@ -245,7 +266,7 @@ const CARD_DIMENSIONS = {
 
 Card fonts also scale down alongside (e.g. `16px` rank in portrait, `15px` in landscape).
 
-> **Spacing rule of thumb:** the cards are the *currency* of mobile space. The vertical budget is roughly `header + hole cards + controls ≤ screen height`, with the table taking the rest. If you add a new control and the table starts to feel crushed, the lever to pull is **card size**, not table size.
+> **Spacing rule of thumb:** the cards are the *currency* of mobile space. The vertical budget is roughly `controls ≤ screen height` (there's no header and no hole-card row — Leave/Cash Out float, and **your hole cards live on the felt at your seat**), with the table taking the rest. If you add a new control and the table starts to feel crushed, the lever to pull is **card size** (the seat cards first — see §7 positions), not table size.
 
 ---
 
@@ -267,6 +288,12 @@ const SEAT_POSITIONS = [
 
 Bet chips sit on the felt in front of each seat, nudged toward the center via `BET_CHIP_POSITIONS`. The pot is at `{ top: 50, left: 50 }`.
 
+**Your hole cards render on the felt too** — absolutely positioned at `getHeroCardPos(seat, isMobile)`, on the line between your seat and the pot so they read like your hand in front of you, and carefully placed to clear the felt's other elements:
+- center seats (0/3): straight toward the middle, pushed **55%** of the way — above the bet chip (which stops at 30%) and below the pot pill;
+- side seats (1/2/4/5): at table-center height (50%), offset to the **inside** of the seat (22% / 78% desktop, 19% / 81% on phones) — clear of the seat column on one side and the community cards on the other.
+
+Cards get a slight fan (rotate ±5°) and scale to 110% while it's your turn. On **landscape phones** they fall back to the compact bottom bar (`useIsLandscapePhone()`), because the flat 2:1 felt has no room.
+
 **Do not convert these to pixels.** Because the felt changes shape (4/5 portrait, 2/1 landscape, 4/3 desktop), percentage positions are the only thing that keeps seats on the rail in all three. If seats ever drift off the felt, the felt's aspect ratio changed or a seat got a fixed-pixel offset.
 
 Each seat is `-translate-x-1/2 -translate-y-1/2` positioned at `top%`/`left%`, stacked content: dealer button → avatar (pulsing green when it's the player's turn) → name → stack → status badges.
@@ -278,8 +305,9 @@ Each seat is `-translate-x-1/2 -translate-y-1/2` positioned at `top%`/`left%`, s
 Inside `.landscape-controls` (bottom zone), top to bottom:
 
 1. **Last-action ticker** (`.last-action-bar`) — *hidden* on portrait and landscape phones (it costs a full row).
-2. **Your hole cards** (`.landscape-hole-cards`) + stack + turn timer.
+2. **Your hole cards** (`.landscape-hole-cards`) + stack — *only on landscape phones*. Everywhere else your cards render on the felt at your seat (§7) and this row isn't in the DOM.
 3. **Controls row** (`.flex flex-wrap … justify-center gap-1.5 sm:gap-2`) containing:
+   - Your-turn countdown pill (when it's your turn)
    - Rebuy / Sit Out (when busted)
    - Ready / Start / bots (when WAITING)
    - **Fold / Check / Call** (`.action-btn-*`)
@@ -342,13 +370,13 @@ Note the bottom sheet scrolls *internally* (`flex-1 overflow-y-auto` on content)
 
 When you change the UI on mobile, keep these in order of importance:
 
-1. **Never scroll the game screen.** Root = `min-h-screen-mobile` + `flex flex-col overflow-hidden`. If content overflows, shrink something (usually cards), don't add scroll.
-2. **Use `svh` helpers, never `vh`.** `min-h-screen-mobile` / `h-screen-mobile` only. A raw `h-screen` reintroduces the iOS address-bar bug instantly.
+1. **Never scroll the game screen.** Root = **`h-screen-mobile`** (definite `height: 100svh` — a `min-height` root would make the felt's `height: 100%` fail to resolve and collapse) + `flex flex-col overflow-hidden relative` (the `relative` anchors the floating Leave / Cash Out overlays). If content overflows, shrink something (usually cards), don't add scroll.
+2. **Use `svh` helpers, never `vh`.** `h-screen-mobile` on the game screen (definite height so `height: 100%` resolves down the chain); `min-h-screen-mobile` on scrolling screens (auth/lobby). A raw `h-screen` reintroduces the iOS address-bar bug instantly.
 3. **Controls bar: `shrink-0` and never `overflow: auto`.** The buttons must always be fully visible. The table zone (`flex-1 min-h-0`) is the shock absorber.
 4. **`min-h-0` on any flex child that must shrink.** `flex-1` alone does NOT allow a child to shrink below its content — forgetting `min-h-0` pushes the controls off-screen. (Both the zone wrapper and the table row have it. Keep it.)
 5. **The felt is height-driven.** Keep `height: 100%` + `aspect-ratio` + `max-width: 100%` on `.felt-wrap`. Never set a fixed pixel height on the table.
 6. **Edit mobile sizes in `mobile-overrides.css`, not in JSX.** The `!important` media blocks beat Tailwind utilities and inline card sizes. `CARD_DIMENSIONS` only controls desktop defaults; on phones, card sizes come from the `--card-*` variables — change those, not the JS.
-7. **Watch the vertical budget.** Screen height ≈ header + (table) + hole cards + controls. Adding a row to the controls (e.g. a new button that wraps) *directly steals table height*. Prefer one-line layouts (`flex-wrap`, smaller gaps, `gap-1.5` mobile / `gap-2` desktop).
+7. **Watch the vertical budget.** Screen height ≈ (table) + controls — there is no header and no hole-card row anymore (Leave/Cash Out float, your cards are on the felt). Adding a row to the controls (e.g. a new button that wraps) *directly steals table height*. Prefer one-line layouts (`flex-wrap`, smaller gaps, `gap-1.5` mobile / `gap-2` desktop).
 8. **Keep touch targets ≥ 32px** (36px is enforced at ≤640px for main buttons — don't shrink them back).
 9. **Test both orientations.** Portrait flips the table to a tall 4/5 stadium; landscape to a flat 2/1 oval with a hidden slider and ticker. What fits in one will overflow in the other.
 10. **Seats are percentages.** Never reposition seats in px.
@@ -360,7 +388,7 @@ When you change the UI on mobile, keep these in order of importance:
 3. If it wraps to a second line or pushes the table too small, compact it in the matching block of `mobile-overrides.css`:
    - portrait → `@media (orientation: portrait) and (max-width: 639px)`
    - landscape → `@media (orientation: landscape) and (max-height: 700px)`
-4. Never add a third visible row to the controls without shrinking the hole cards or the ticker offset.
+4. Never add a third visible row to the controls without shrinking the seat cards or the felt content instead.
 
 ---
 
@@ -389,6 +417,7 @@ When you change the UI on mobile, keep these in order of importance:
 8. **Changing the landscape threshold from 700px** → tall-layout phones with browser chrome fall back to the portrait-style bar sideways (broken).
 9. **Adding a control that wraps to a new row** → eats the vertical budget; the table shrinks and community cards can collide with side seats. Compensate elsewhere (smaller gap, smaller card, `whitespace-nowrap`).
 10. **Forgetting `!important` in a new mobile override** → silently loses to Tailwind utilities / inline styles. **And forgetting the import:** `mobile-overrides.css` is imported in `main.jsx` *after* `index.css` — if that import is ever removed or reordered, every phone layout breaks at once.
+11. **Re-adding a header bar to the club room** → eats the vertical budget the table now enjoys. If you need table info back, put it in a small pill on the felt (like the pot/street pills), not a full-width header row. The floating Leave (top-left) and Cash Out (top-right) buttons are `absolute` overlays — keep them that way.
 
 ---
 
@@ -422,7 +451,7 @@ All animations live in `index.css`:
 From the git history, the table evolved through these deliberate decisions — respect them when editing:
 
 1. **Racetrack (stadium) shape** replaces the old rectangle — straight sides with rounded caps (`border-radius: 9999px`).
-2. **Portrait mode stands the table vertical** (4/5 stadium) so the tall phone screen is used fully, with community cards 'md'-sized and controls compacted so *header + table + controls* all fit.
+2. **Portrait mode stands the table vertical** (4/5 stadium) so the tall phone screen is used fully, with community cards 'md'-sized and controls compacted so *table + controls* all fit (the header was removed — see below).
 3. **Landscape keeps the vertical stack** (table on top, full-width controls at the bottom) — never a right-hand column — with everything tightened to fit the short height.
 4. **The table absorbs leftover space** — `max-h-full` + height-driven felt means "no scrolling" is guaranteed by construction.
 5. **The action bar never shrinks or scrolls** — it's `shrink-0`; when space is tight the table flattens instead.
@@ -431,13 +460,14 @@ From the git history, the table evolved through these deliberate decisions — r
 
 - **Why `svh` instead of `vh`?** Mobile browser chrome (address bar, bottom nav) makes `100vh` taller than the visible screen. `svh` = small viewport height = what's always visible, so the action bar can never be pushed under the browser UI.
 - **Why a 4:5 portrait stadium?** A tall phone screen is best used by a *tall* table — straight sides, rounded caps top/bottom. Width is derived from height via `aspect-ratio: 4/5`, so the felt can never overflow the row's height.
-- **Why 44×64 hole cards in portrait?** Large enough to read ranks at arm's length, small enough that header + hole cards + controls + table all fit inside `100svh`. It's the tuned midpoint of the vertical budget.
+- **Why do your hole cards live on the felt at your seat?** The old bottom-bar row (64×90 on desktop, 44×64 on portrait) cost a full row of vertical budget on every screen. Moving the cards to the felt — at a position between the seat and the pot, cleared from the chips and community cards — reclaimed that row for the table (roughly 100px on desktop). The card pair gets a fan + gold glow + turn-scale so it still reads clearly at a glance. On landscape phones they stay in the compact bottom bar because the flat 2:1 felt is too short to host them.
 - **Why hide the last-action ticker on phones?** A full text row costs ~20px of vertical budget. The ticker is informational; the action buttons are what matter, so the table wins the pixels.
 - **Why 2:1 in landscape?** Landscape screens are short and wide — the flattest oval maximizes felt area while the bottom bar keeps every button visible.
 - **Why the 700px landscape threshold?** Phones whose *layout* viewport is taller than the *visible* area (browser chrome) must still get the compact landscape bar; 500px would leak the full-size portrait bar sideways onto them.
 - **Why `!important` everywhere?** Mobile rules must beat both Tailwind utilities and the inline `style={{ width: dim.w }}` pixel sizes from `CARD_DIMENSIONS`.
 - **Why hide only the bet slider in landscape?** Hiding the whole bet container once hid Raise/All-In too and players couldn't bet sideways. Presets + Raise + All-In stay; only the range slider is `display: none`.
 - **Why CSS variables for card sizes?** Previously the same selector (e.g. `.landscape-hole-cards .card-front`) repeated 3× with different px values across breakpoints. Now there's one consumer rule and each breakpoint only redefines `--card-*` values — a size change is a one-line edit with no selector duplication.
+- **Why was the header removed from the club room?** It cost ~40px of vertical budget on every screen. Leave and Cash Out now float as compact overlays over the table corners (root is `relative`, buttons are `absolute top-2 left-2` / `top-2 right-2`, z-40), so the felt gets the full screen height — the same pixel-saving philosophy as hiding the last-action ticker on phones.
 
 ---
 
