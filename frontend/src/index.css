@@ -469,6 +469,13 @@ html {
   .felt-table {
     border-width: 8px !important;
   }
+
+  /* Your hole cards shrink too, so the controls stay on screen */
+  .landscape-hole-cards .card-front,
+  .landscape-hole-cards .card-back {
+    width: 52px !important;
+    height: 74px !important;
+  }
 }
 
 /* ================================================================
@@ -476,7 +483,7 @@ html {
    When the viewport is wider than it is tall, switch to a
    horizontal layout: table on the left, controls on the right.
    ================================================================ */
-@media (orientation: landscape) and (max-height: 500px) {
+@media (orientation: landscape) and (max-height: 560px) {
   /* Switch from vertical flex to horizontal flex */
   .landscape-row {
     flex-direction: row !important;
@@ -497,9 +504,24 @@ html {
     border-left: 1px solid rgba(255,255,255,0.08) !important;
   }
 
-  /* Hide hole cards display in landscape (show avatars only) */
-  .landscape-hide-hole-cards {
-    display: none !important;
+  /* Keep YOUR hole cards visible in landscape, just compact — hiding them
+     entirely made the game unplayable sideways (there was no way to see
+     your own cards). Shrink the xl cards down to ~sm size so they fit the
+     narrow controls panel. */
+  .landscape-hole-cards {
+    gap: 4px !important;
+  }
+  .landscape-hole-cards .card-front,
+  .landscape-hole-cards .card-back {
+    width: 36px !important;
+    height: 52px !important;
+  }
+  .landscape-hole-cards .card-front .text-lg,
+  .landscape-hole-cards .card-front .text-xl {
+    font-size: 15px !important;
+  }
+  .landscape-hole-cards .card-front .text-\[11px\] {
+    font-size: 9px !important;
   }
 
   /* Reduce table border width */

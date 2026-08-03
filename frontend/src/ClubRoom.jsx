@@ -1137,8 +1137,11 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
           </div>
         </div>
 
-        {/* ── BOTTOM ROW: Your Hole Cards + Pot Info + Controls ── */}
-        <div className="shrink-0 bg-gray-900/95 backdrop-blur-sm border-t border-gray-800 px-1.5 sm:px-4 py-1 sm:py-3 landscape-controls">
+        {/* ── BOTTOM ROW: Your Hole Cards + Pot Info + Controls ──
+            Can shrink + scroll internally so the action buttons are never
+            clipped off-screen on short/small phones (the root is
+            overflow-hidden, so without this the bottom would be unreachable). */}
+        <div className="shrink min-h-0 overflow-y-auto bg-gray-900/95 backdrop-blur-sm border-t border-gray-800 px-1.5 sm:px-4 py-1 sm:py-3 landscape-controls">
           <div className="max-w-4xl mx-auto flex flex-col gap-0.5 sm:gap-1.5">
 
             {/* Last Action Bar */}
@@ -1157,7 +1160,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
             {/* ── Your Hole Cards (BIG — separate from seat) ── */}
             {gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
-              <div className="flex items-center justify-center gap-1.5 sm:gap-3 py-0.5 sm:py-1 landscape-hide-hole-cards">
+              <div className="flex items-center justify-center gap-1.5 sm:gap-3 py-0.5 sm:py-1 landscape-hole-cards">
                 {holeCards.map((card, i) => (
                   <Card key={i} card={card} faceDown={false} size="xl" dealDelay={i} />
                 ))}
