@@ -487,20 +487,43 @@ html {
 }
 
 /* ================================================================
-   PORTRAIT PHONES — make the whole game fit without scrolling
-   The racetrack table stands VERTICAL (height-driven 3:4 stadium,
-   straight sides left/right, rounded caps top/bottom) so it fills the
-   tall phone screen. Community cards are 'md' sized and the controls
-   are compacted so header + table + controls all fit the viewport.
+   PORTRAIT PHONES — make the table as BIG as possible while still
+   fitting the screen with no scrolling.
+   The racetrack table stands VERTICAL (height-driven 4:5 stadium,
+   straight sides left/right, rounded caps top/bottom). The felt fills
+   100% of the table row, so every pixel saved in the controls below
+   makes the table bigger. Community cards are 'md' sized and the
+   controls are compacted so header + table + controls all fit.
    ================================================================ */
 @media (orientation: portrait) and (max-width: 639px) {
-  /* Size the felt by HEIGHT and derive width from the 3:4 ratio, so the
+  /* Size the felt by HEIGHT and derive width from the 4:5 ratio, so the
      vertical racetrack fills the row without overflowing it. */
   .felt-wrap {
     width: auto !important;
     height: 100% !important;
     max-width: 100% !important;
-    aspect-ratio: 3 / 4 !important;
+    aspect-ratio: 4 / 5 !important;
+  }
+
+  /* Give the table more height: hide the last-action ticker on portrait
+     phones (it only reappears on larger screens). */
+  .landscape-controls .last-action-bar {
+    display: none !important;
+  }
+
+  /* Compact your hole cards a touch so the controls take less height
+     and the table grows. */
+  .landscape-hole-cards .card-front,
+  .landscape-hole-cards .card-back {
+    width: 44px !important;
+    height: 64px !important;
+  }
+  .landscape-hole-cards .card-front .text-lg,
+  .landscape-hole-cards .card-front .text-xl {
+    font-size: 16px !important;
+  }
+  .landscape-hole-cards .card-front .text-\[11px\] {
+    font-size: 10px !important;
   }
 }
 
@@ -576,10 +599,15 @@ html {
     flex: 1 1 auto !important;
   }
 
-  /* Keep the oval well-proportioned instead of pancaking across the full
-     width — a narrower felt leaves breathing room on short screens. */
+  /* The felt is HEIGHT-driven in landscape too (height:100% of the row,
+     width derived from the 2:1 ratio). Because it can only ever be as
+     big as the space left after the controls, the table + controls ALWAYS
+     fit on screen — no scrolling, no matter how short the viewport. */
   .landscape-table .felt-wrap {
-    max-width: 640px !important;
+    width: auto !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    aspect-ratio: 2 / 1 !important;
   }
 
   /* Controls: full-width bottom bar. Never shrinks below its content and
