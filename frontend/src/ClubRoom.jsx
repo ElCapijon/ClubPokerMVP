@@ -131,12 +131,26 @@ function Card({ card, faceDown, size, dealDelay }) {
   );
 }
 
+// True on phones/small tablets (<640px). Drives smaller card sizes so the
+// whole table + controls fit on screen without scrolling.
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 640px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)');
+    const onChange = (e) => setIsMobile(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return isMobile;
+}
+
 // ====================================================================
 // MAIN COMPONENT
 // ====================================================================
 export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
   const { gameId = clubData.clubId, tableName = 'Poker Table', userId, seatIndex: mySeatIndex, buyinAmount, initialPlayers } = clubData;
   const clubId = gameId;
+  const isMobile = useIsMobile();
   const [players, setPlayers] = useState(initialPlayers || Array(6).fill(null));
   const [gameState, setGameState] = useState(clubData.gameState || 'WAITING');
   const [isConnected, setIsConnected] = useState(true);
@@ -900,9 +914,10 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
 
         {/* ── TOP ROW: Table + Players ── */}
         <div className="flex-1 flex items-center justify-center p-0.5 sm:p-2 min-h-0 landscape-table">
-          {/* On mobile (<640px), use a 5:3 ratio to save vertical space.
+          {/* On mobile (<640px), use a flatter 2:1 oval so the whole game
+              fits the screen height without scrolling.
               On desktop (>=640px), use the classic 4:3 ratio. */}
-          <div className="relative w-full max-h-full sm:aspect-[4/3] aspect-[5/3] felt-wrap" style={{ maxWidth: '800px', maxHeight: '100%' }}>
+          <div className="relative w-full max-h-full sm:aspect-[4/3] aspect-[2/1] felt-wrap" style={{ maxWidth: '800px', maxHeight: '100%' }}>
 
             {/* The Felt Table */}
             <div className="felt-table w-full h-full flex flex-col items-center justify-center relative overflow-hidden">
@@ -916,28 +931,31 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                 }}
               />
 
-              {/* ── Community Cards (positioned in the lower half of the felt) ── */}
-              <div className="flex items-center gap-2 sm:gap-3 mb-2 z-10 community-row">
+              {/* ── Community Cards (positioned in the upper-center of the felt) ── */}
+              <div className="flex items-center gap-1.5 sm:gap-3 mb-1.5 z-10 community-row">
                 {[0, 1, 2, 3, 4].map(i => (
-                  <Card key={i} card={communityCards[i]} faceDown={!communityCards[i]} size="lg" dealDelay={i} />
+                  <Card key={i} card={communityCards[i]} faceDown={!communityCards[i]} size={isMobile ? 'md' : 'lg'} dealDelay={i} />
                 ))}
               </div>
 
-              {/* ── Pot ── */}
-              {pot > 0 && (
-                <div key={pot} className="bg-black/50 rounded-full px-4 sm:px-6 py-1.5 sm:py-2 backdrop-blur-sm z-10 animate-pot-grow">
-                  <span className="text-sm sm:text-base font-bold text-poker-gold flex items-center gap-2">
-                    Pot: ${pot.toLocaleString()}
-                  </span>
-                </div>
-              )}
-
-              {/* ── Game Status / Street ── */}
-              {gameState !== 'WAITING' && gameState !== 'HAND_COMPLETE' && (
-                <div className="mt-1.5 px-3 py-0.5 sm:py-1 bg-white/5 rounded-full text-[11px] sm:text-xs text-gray-400 z-10">
-                  <span className={`inline-block w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full mr-1.5 ${phaseColor}`} />
-                  {gameState}
-                  {currentBet > 0 && <span className="ml-1.5 sm:ml-2">· Bet: ${currentBet}</span>}
+              {/* ── Pot + Street — one compact row so they never stack up over
+                   the seats on small screens ── */}
+              {(pot > 0 || (gameState !== 'WAITING' && gameState !== 'HAND_COMPLETE')) && (
+                <div className="flex items-center justify-center gap-1.5 sm:gap-3 flex-wrap z-10 pot-street-row">
+                  {pot > 0 && (
+                    <div key={pot} className="bg-black/50 rounded-full px-3 sm:px-6 py-1 sm:py-1.5 backdrop-blur-sm animate-pot-grow pot-pill">
+                      <span className="text-[11px] sm:text-base font-bold text-poker-gold whitespace-nowrap">
+                        Pot: ${pot.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                  {gameState !== 'WAITING' && gameState !== 'HAND_COMPLETE' && (
+                    <div className="px-2.5 sm:px-3 py-0.5 sm:py-1 bg-white/5 rounded-full text-[10px] sm:text-xs text-gray-400 street-pill whitespace-nowrap">
+                      <span className={`inline-block w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full mr-1.5 ${phaseColor}`} />
+                      {gameState}
+                      {currentBet > 0 && <span className="ml-1.5 sm:ml-2">· Bet: ${currentBet}</span>}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1138,15 +1156,15 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
         </div>
 
         {/* ── BOTTOM ROW: Your Hole Cards + Pot Info + Controls ──
-            Can shrink + scroll internally so the action buttons are never
-            clipped off-screen on short/small phones (the root is
-            overflow-hidden, so without this the bottom would be unreachable). */}
-        <div className="shrink min-h-0 overflow-y-auto bg-gray-900/95 backdrop-blur-sm border-t border-gray-800 px-1.5 sm:px-4 py-1 sm:py-3 landscape-controls">
+            NEVER shrinks or scrolls: the action buttons are always fully
+            visible. When space is tight the table row above absorbs the
+            squeeze (its felt flattens via max-h-full) instead. */}
+        <div className="shrink-0 bg-gray-900/95 backdrop-blur-sm border-t border-gray-800 px-1.5 sm:px-4 py-1 sm:py-3 landscape-controls">
           <div className="max-w-4xl mx-auto flex flex-col gap-0.5 sm:gap-1.5">
 
             {/* Last Action Bar */}
             {lastAction && gameState !== 'WAITING' && (
-              <div className="text-center animate-fade-in">
+              <div className="text-center animate-fade-in last-action-bar">
                 <span className="text-[9px] sm:text-xs text-gray-400">
                   <span className="font-medium text-white">{lastAction.userName}</span>{' '}
                   {lastAction.action === 'fold'  && <span className="text-red-400 font-medium">folded</span>}
@@ -1162,7 +1180,7 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
             {gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
               <div className="flex items-center justify-center gap-1.5 sm:gap-3 py-0.5 sm:py-1 landscape-hole-cards">
                 {holeCards.map((card, i) => (
-                  <Card key={i} card={card} faceDown={false} size="xl" dealDelay={i} />
+                  <Card key={i} card={card} faceDown={false} size={isMobile ? 'lg' : 'xl'} dealDelay={i} />
                 ))}
                 {myPlayerData && (
                   <div className="flex items-center gap-1.5 sm:gap-3 ml-1 sm:ml-3 text-[10px] sm:text-sm">
@@ -1351,13 +1369,13 @@ export default function ClubRoom({ clubData, displayName, onLeave, onLogout }) {
                         </span>
                       </div>
                       <button onClick={() => handleAction(isRaiseContext ? 'raise' : 'bet', sliderBet)}
-                        className="bg-gradient-to-r from-purple-600 to-purple-500 text-white font-bold rounded-xl px-4 py-2
+                        className="btn-raise bg-gradient-to-r from-purple-600 to-purple-500 text-white font-bold rounded-xl px-4 py-2
                                    hover:from-purple-500 hover:to-purple-400 transition-all active:scale-95
                                    shadow-lg shadow-purple-600/20 text-xs">
                         {isRaiseContext ? 'Raise' : 'Bet'}
                       </button>
                       <button onClick={() => handleAction(isRaiseContext ? 'raise' : 'bet', maxBetValue)}
-                        className="bg-gradient-to-r from-orange-600 to-orange-500 text-white font-bold rounded-xl px-4 py-2
+                        className="btn-allin bg-gradient-to-r from-orange-600 to-orange-500 text-white font-bold rounded-xl px-4 py-2
                                    hover:from-orange-500 hover:to-orange-400 transition-all active:scale-95
                                    shadow-lg shadow-orange-600/20 text-xs">
                         All-In ${maxBetValue.toLocaleString()}
