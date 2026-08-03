@@ -6,19 +6,16 @@ const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'h
 
 const MAX_SEATS = 6;
 
-// Seat positions for the oval table layout (clockwise from bottom-center)
-// Pushed up slightly to leave room for big hole cards + community cards below
+// Seat positions for the racetrack (stadium) table layout, clockwise from
+// bottom-center. The table is a stadium shape: straight sides with
+// semicircular ends. Each seat hugs the rail.
 const SEAT_POSITIONS = [
-  // Ellipse-hugging layout for 4:3 racetrack oval.
-  // The table is rounded-[50%] with center (50,50), rx≈44, ry≈42.
-  // Each seat sits on the ellipse edge, hugging the rail.
-  // Side seats (1,2,4,5) are at the widest part of the ellipse.
-  { top: 91, left: 50 },  // Seat 0: Hero — bottom center, on curve
-  { top: 68, left: 10 },  // Seat 1: Lower-left, hugging the rail
-  { top: 32, left: 10 },  // Seat 2: Upper-left, hugging the rail
-  { top: 8,  left: 50 },  // Seat 3: Top center, on curve
-  { top: 32, left: 90 },  // Seat 4: Upper-right, hugging the rail
-  { top: 68, left: 90 },  // Seat 5: Lower-right, hugging the rail
+  { top: 91, left: 50 },  // Seat 0: Hero — bottom center, on the straight edge
+  { top: 68, left: 10 },  // Seat 1: Lower-left, on the left end cap
+  { top: 32, left: 10 },  // Seat 2: Upper-left, on the left end cap
+  { top: 8,  left: 50 },  // Seat 3: Top center, on the straight edge
+  { top: 32, left: 90 },  // Seat 4: Upper-right, on the right end cap
+  { top: 68, left: 90 },  // Seat 5: Lower-right, on the right end cap
 ];
 
 // Bet chips are rendered on the felt directly in front of each seat, pushed
