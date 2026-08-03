@@ -196,7 +196,7 @@ function useIsMobile() {
 
 It's used for:
 - community cards: `size={isMobile ? 'md' : 'lg'}`
-- your seat cards (on the felt): `size={isMobile ? 'sm' : 'md'}`
+- your seat cards (behind the avatar): `size={isMobile ? 'md' : 'lg'}`
 - the landscape-phone bottom-bar hole cards only: `size={isMobile ? 'lg' : 'xl'}`
 
 A second hook, `useIsLandscapePhone()` (same media query as the landscape CSS
@@ -229,7 +229,7 @@ const CARD_DIMENSIONS = {
 
 | Context | Desktop | Mobile portrait | Mobile landscape |
 |---|---|---|---|
-| Your seat cards (`.hero-seat-cards`, on the felt) | md — 40×56 | **30×44** | *(not on the felt)* |
+| Your seat cards (`.hero-seat-cards`, behind the avatar) | **44×64** (lg size prop) | **36×52** | *(not on the felt)* |
 | Your hole cards (`.landscape-hole-cards`, bottom bar) | *(not in the bar)* | *(not in the bar)* | **36×52** |
 | Community cards (`.community-row`) | lg — 50×72 | **38×54** | **32×46** |
 | Seat card backs | sm — 32×46 | 32×46 | 32×46 |
@@ -240,7 +240,8 @@ const CARD_DIMENSIONS = {
 :root {
   --card-width-hole: 64px;        --card-height-hole: 90px;      /* landscape-phone bottom bar only */
   --card-width-community: 50px;   --card-height-community: 72px;
-  --card-width-hero-seat: 40px;   --card-height-hero-seat: 56px; /* your cards on the felt */
+  --card-width-hero-seat: 44px;   --card-height-hero-seat: 64px; /* taller than the avatar ring (52px)
+                                                                     so the pair peeks out behind it */
 }
 /* Consumer rules — only exist to beat the inline CARD_DIMENSIONS sizes: */
 .landscape-hole-cards .card-front, .landscape-hole-cards .card-back {
@@ -288,9 +289,9 @@ const SEAT_POSITIONS = [
 
 Bet chips sit on the felt in front of each seat, nudged toward the center via `BET_CHIP_POSITIONS`. The pot is at `{ top: 50, left: 50 }`.
 
-**Your hole cards render on the felt too** — absolutely positioned at `getHeroCardPos(seat, isMobile)` via the per-seat `HERO_CARD_POSITIONS` tables (one for desktop, one for mobile portrait). The pair hugs the **rail beside the seat column** rather than floating up toward the pot (that read as "too high up the table"):
-- center seats (0/3): beside the avatar at the rail — bottom-center seat puts the pair to the **right** (left 61% desktop / 63% mobile, top 84% / 86%), top-center to the **left** (39% / 37%, top 16% / 14%);
-- side seats (1/2/4/5): below the lower seats (1/5) and above the upper seats (2/4) at the rail (top 84% / 16% desktop, 86% / 14% mobile), nudged toward the table inside of the seat column (left 21% / 79% desktop, 25% / 75% mobile) — clear of the avatar/dealer column, the bet chip, the community cards and the pot pill.
+**Your hole cards render on the felt too** — absolutely positioned by `getHeroCardPos(seat)` at the **seat center**, i.e. right where the avatar sits. They render **behind** the profile image: the seat column carries `z-10` while the cards sit at `z-[5]`, so the avatar paints over the middle of the pair and the cards **peek out around it** (the classic "cards in front of you" poker look). The pair is sized taller than the avatar ring (44×64 desktop, 36×52 mobile) so the peek is clearly visible.
+
+Because the cards' top edge reaches up into the seat column, the **dealer button on your own seat gets nudged up slightly** (`-mt-1.5 sm:-mt-2` on the D chip) so it clears them.
 
 Cards get a slight fan (rotate ±5°) and scale to 110% while it's your turn. On **landscape phones** they fall back to the compact bottom bar (`useIsLandscapePhone()`), because the flat 2:1 felt has no room.
 
@@ -460,7 +461,7 @@ From the git history, the table evolved through these deliberate decisions — r
 
 - **Why `svh` instead of `vh`?** Mobile browser chrome (address bar, bottom nav) makes `100vh` taller than the visible screen. `svh` = small viewport height = what's always visible, so the action bar can never be pushed under the browser UI.
 - **Why a 4:5 portrait stadium?** A tall phone screen is best used by a *tall* table — straight sides, rounded caps top/bottom. Width is derived from height via `aspect-ratio: 4/5`, so the felt can never overflow the row's height.
-- **Why do your hole cards live on the felt at your seat?** The old bottom-bar row (64×90 on desktop, 44×64 on portrait) cost a full row of vertical budget on every screen. Moving the cards to the felt reclaimed that row for the table (roughly 100px on desktop). **Why at the rail beside the seat rather than on the seat→pot line?** Two attempts to push the cards down that line (55% → 48% of the way) barely moved them: the bet chip (which stops at 30%) and the seat column block any lower position for bottom-center seats. Tucking the pair beside the avatar at the rail (top ~84%) is the only spot that reads as truly low, and it matches real poker tables. The card pair gets a fan + gold glow + turn-scale so it still reads clearly at a glance. On landscape phones they stay in the compact bottom bar because the flat 2:1 felt is too short to host them.
+- **Why do your hole cards live on the felt at your seat?** The old bottom-bar row (64×90 on desktop, 44×64 on portrait) cost a full row of vertical budget on every screen. Moving the cards to the felt reclaimed that row for the table (roughly 100px on desktop). **Why behind the avatar rather than floating on the felt?** Positioning them anywhere on the seat→pot line read as "too high up the table", and there is physically no room to lower them toward the seat (the bet chip and the seat column block it). Centering them **on the seat behind the profile image** is the only placement that reads as truly at your seat — and it matches how real poker tables show your hand. The avatar paints over the pair (seat column `z-10` > cards `z-[5]`) so the cards peek out top/bottom, and the dealer button on your seat gets a small `-mt` nudge so the peek clears it. The card pair gets a fan + gold glow + turn-scale so it still reads clearly at a glance. On landscape phones they stay in the compact bottom bar because the flat 2:1 felt is too short to host them.
 - **Why hide the last-action ticker on phones?** A full text row costs ~20px of vertical budget. The ticker is informational; the action buttons are what matter, so the table wins the pixels.
 - **Why 2:1 in landscape?** Landscape screens are short and wide — the flattest oval maximizes felt area while the bottom bar keeps every button visible.
 - **Why the 700px landscape threshold?** Phones whose *layout* viewport is taller than the *visible* area (browser chrome) must still get the compact landscape bar; 500px would leak the full-size portrait bar sideways onto them.

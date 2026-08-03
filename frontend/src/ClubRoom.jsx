@@ -161,36 +161,14 @@ function useIsLandscapePhone() {
   return isLandscape;
 }
 
-// Where YOUR hole cards sit on the felt while you are seated. Each seat's
-// cards hug the RAIL next to the seat column — NOT floating up toward the pot
-// (that read as "too high up the table"). The pair is tucked to the inside of
-// the seat so it always clears the avatar/dealer column, the bet chip, the
-// community cards and the pot pill:
-//   - center seats (0/3): beside the avatar at the rail (bottom → right,
-//     top → left)
-//   - side seats (1/2/4/5): below the lower seats (1/5), above the upper
-//     seats (2/4), nudged toward the table inside of the seat column
-const HERO_CARD_POSITIONS = [
-  { top: 84, left: 61 },   // Seat 0: bottom-center → beside-right
-  { top: 84, left: 21 },   // Seat 1: lower-left → below, inside
-  { top: 16, left: 21 },   // Seat 2: upper-left → above, inside
-  { top: 16, left: 39 },   // Seat 3: top-center → beside-left
-  { top: 16, left: 79 },   // Seat 4: upper-right → above, inside
-  { top: 84, left: 79 },   // Seat 5: lower-right → below, inside
-];
-// Mobile portrait: the felt is a narrower 4/5 stadium, so the pair sits a bit
-// lower/outer (and the side seats tuck further in to stay off the rail).
-const HERO_CARD_POSITIONS_MOBILE = [
-  { top: 86, left: 63 },
-  { top: 86, left: 25 },
-  { top: 14, left: 25 },
-  { top: 14, left: 37 },
-  { top: 14, left: 75 },
-  { top: 86, left: 75 },
-];
-
-function getHeroCardPos(index, isMobile) {
-  return (isMobile ? HERO_CARD_POSITIONS_MOBILE : HERO_CARD_POSITIONS)[index] || { top: 50, left: 50 };
+// Where YOUR hole cards sit while you are seated: centered on your seat and
+// rendered BEHIND the avatar (the seat column carries the higher z-index), so
+// the profile image sits in front of the pair and the cards peek out around
+// it — the classic "cards in front of you" poker look. The dealer button on
+// your seat is nudged up slightly (-mt on the D chip) so the cards' top edge
+// clears it. On landscape phones they fall back to the compact bottom bar.
+function getHeroCardPos(index) {
+  return SEAT_POSITIONS[index] || { top: 50, left: 50 };
 }
 
 // ====================================================================
@@ -1042,7 +1020,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
               const isActiveTurn = index === currentPlayerSeatIndex;
               const isDealer = index === dealerSeatIndex;
               const chipPos = BET_CHIP_POSITIONS[index];
-              const heroCardPos = isMe ? getHeroCardPos(index, isMobile) : null;
+              const heroCardPos = isMe ? getHeroCardPos(index) : null;
               // Readable, adaptive bet chip: abbreviate large amounts (e.g. $1.2K,
               // $2.5M) and only scale the font down slightly, so big bets stay
               // crisp and legible instead of being clipped inside a fixed circle.
@@ -1076,7 +1054,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                       </div>
                     </div>
                   )}
-                  <div className="absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-500"
+                  <div className="absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-500 z-10"
                     style={{ top: `${pos.top}%`, left: `${pos.left}%` }}
                   >
                   <div className={`
@@ -1087,8 +1065,11 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                   `}>
                     {/* Dealer Button */}
                     {isDealer && (
-                      <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-white text-black flex items-center justify-center
-                                      text-[9px] sm:text-[11px] font-bold shadow-lg z-10 animate-bounce-subtle">
+                      /* On YOUR seat the D chip is nudged up slightly so the
+                         hole cards peeking from behind the avatar clear it. */
+                      <div className={`w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-white text-black flex items-center justify-center
+                                      text-[9px] sm:text-[11px] font-bold shadow-lg z-10 animate-bounce-subtle
+                                      ${isMe ? '-mt-1.5 sm:-mt-2' : ''}`}>
                         D
                       </div>
                     )}
@@ -1124,8 +1105,11 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                       </div>
                     </div>
 
-                    {/* Name */}
-                    <p className="text-[10px] sm:text-xs font-semibold text-white truncate max-w-[90px] sm:max-w-[110px] flex items-center justify-center gap-0.5">
+                    {/* Name — on YOUR seat it gets a dark pill so it stays
+                        readable over the hole cards peeking from behind the
+                        avatar (white text on a white card would vanish). */}
+                    <p className={`text-[10px] sm:text-xs font-semibold text-white truncate max-w-[90px] sm:max-w-[110px] flex items-center justify-center gap-0.5
+                                  ${isMe ? 'bg-gray-900/70 backdrop-blur-sm px-1.5 py-0.5 rounded-full' : ''}`}>
                       {player.userName}
                       {/* ── BOTS ── badge on bot seats so humans can tell
                            who they're playing against */}
@@ -1181,7 +1165,9 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                     against the felt; on landscape phones they fall back to
                     the compact bottom bar (no room on the flat 2:1 felt). */}
                 {isMe && !isLandscapePhone && myPlayerData && gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
-                  <div className="absolute -translate-x-1/2 -translate-y-1/2 z-10 hero-seat-cards pointer-events-none"
+                  // z-[5]: BELOW the seat column (z-10) so the avatar paints
+                  // over the pair — the cards peek out around the profile image.
+                  <div className="absolute -translate-x-1/2 -translate-y-1/2 z-[5] hero-seat-cards pointer-events-none"
                     style={{ top: `${heroCardPos.top}%`, left: `${heroCardPos.left}%` }}
                   >
                     <div className={`flex items-end gap-0.5 sm:gap-1 transition-transform duration-300 ${isActiveTurn ? 'scale-110' : ''}`}
@@ -1189,7 +1175,7 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                     >
                       {holeCards.map((card, i) => (
                         <div key={i} style={{ transform: `rotate(${i === 0 ? -5 : 5}deg)`, zIndex: i }}>
-                          <Card card={card} faceDown={false} size={isMobile ? 'sm' : 'md'} dealDelay={i} />
+                          <Card card={card} faceDown={false} size={isMobile ? 'md' : 'lg'} dealDelay={i} />
                         </div>
                       ))}
                     </div>

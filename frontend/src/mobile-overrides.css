@@ -16,14 +16,21 @@
    consumer rules below size hole cards and community cards from these
    variables; each breakpoint further down only redefines the values,
    so card sizes have ONE source of truth per breakpoint.
+
+   NOTE: hero-seat cards are the EXCEPTION — their size lives ONLY in
+   these variables (the 'lg'/'md' size props on them exist just for the
+   font classes). They must stay taller than the avatar ring (52px
+   desktop / 44px mobile) so the pair peeks out from behind the avatar.
    ================================================================ */
 :root {
   --card-width-hole: 64px;
   --card-height-hole: 90px;
   --card-width-community: 50px;
   --card-height-community: 72px;
-  --card-width-hero-seat: 40px;
-  --card-height-hero-seat: 56px;
+  /* YOUR hole cards sit behind the avatar at your seat — sized a bit taller
+     than the avatar ring so the pair peeks out around the profile image. */
+  --card-width-hero-seat: 44px;
+  --card-height-hero-seat: 64px;
 }
 
 /* Consumer rules — exist only to override the inline widths set by
@@ -199,10 +206,12 @@ html {
   :root {
     --card-width-community: 38px;
     --card-height-community: 54px;
-    /* Your seat cards shrink too — the portrait felt is narrow, so they
-       sit tight between the seat column and the community cards */
+    /* Your seat cards shrink a touch — the portrait felt is narrow, so they
+       stay slim (30px) to clear the side-seat bet chips, but stay taller
+       than the avatar ring (44px) so they still peek out behind the profile
+       image */
     --card-width-hero-seat: 30px;
-    --card-height-hero-seat: 44px;
+    --card-height-hero-seat: 52px;
   }
   .community-row .card-front .text-base,
   .community-row .card-front .text-lg {
@@ -212,14 +221,14 @@ html {
     font-size: 8px !important;
   }
   /* Smaller rank fonts on the seat cards so the corners stay readable */
-  .hero-seat-cards .card-front .text-xs {
-    font-size: 10px !important;
-  }
   .hero-seat-cards .card-front .text-sm {
-    font-size: 11px !important;
+    font-size: 12px !important;
   }
-  .hero-seat-cards .card-front .text-\[8px\] {
-    font-size: 7px !important;
+  .hero-seat-cards .card-front .text-base {
+    font-size: 14px !important;
+  }
+  .hero-seat-cards .card-front .text-\[9px\] {
+    font-size: 8px !important;
   }
 }
 
@@ -362,8 +371,8 @@ html {
    seats, keeping the hero's seat cards clear of the board. */
 @media (max-width: 380px) {
   :root {
-    --card-width-hero-seat: 26px;
-    --card-height-hero-seat: 38px;
+    --card-width-hero-seat: 32px;
+    --card-height-hero-seat: 48px;
     --card-width-community: 32px;
     --card-height-community: 46px;
   }
