@@ -21,7 +21,7 @@ const SEAT_POSITIONS = [
 // toward the table center (50,50) so they read like a real bet on the table.
 // Center seats (0 & 3) are pushed further so the chip clears the tall seat
 // column (dealer button + avatar + name); side seats only need a small nudge.
-const BET_CHIP_FRACTIONS = [0.30, 0.20, 0.20, 0.30, 0.20, 0.20];
+const BET_CHIP_FRACTIONS = [0.28, 0.20, 0.20, 0.28, 0.20, 0.20];
 const BET_CHIP_POSITIONS = SEAT_POSITIONS.map((pos, i) => ({
   top: pos.top + (50 - pos.top) * BET_CHIP_FRACTIONS[i],
   left: pos.left + (50 - pos.left) * BET_CHIP_FRACTIONS[i],
@@ -164,20 +164,21 @@ function useIsLandscapePhone() {
 // Where YOUR hole cards sit on the felt while you are seated. They render on
 // the line between your seat and the pot so they read like your hand sitting
 // in front of you, and they clear everything already on the felt:
-//   - center seats (0/3): straight up/down toward the middle, pushed 55% of
-//     the way so they sit above the bet chip (which stops at 30%) and below
-//     the pot pill
-//   - side seats (1/2/4/5): at table-center height, offset to the INSIDE of
-//     the seat so they clear the seat column on one side and the community
-//     cards on the other
+//   - center seats (0/3): straight up/down toward the middle, pushed 48% of
+//     the way (was 55% — the cards floated too high up the felt). They now
+//     sit just above the bet chip (which stops at 28%) and below the pot pill
+//   - side seats (1/2/4/5): 70% of the way toward the middle (was a flat 50%
+//     = all the way to table center, which stranded them mid-felt). They now
+//     hug their seat and stay clear of the side bet chip (which stops at 20%)
 function getHeroCardPos(index, isMobile) {
   const isCenter = index === 0 || index === 3;
   if (isCenter) {
     const pos = SEAT_POSITIONS[index];
-    return { top: pos.top + (50 - pos.top) * 0.55, left: 50 };
+    return { top: pos.top + (50 - pos.top) * 0.48, left: 50 };
   }
   const isLeft = index === 1 || index === 2;
-  return { top: 50, left: isLeft ? (isMobile ? 19 : 22) : (isMobile ? 81 : 78) };
+  const pos = SEAT_POSITIONS[index];
+  return { top: pos.top + (50 - pos.top) * 0.70, left: isLeft ? (isMobile ? 19 : 22) : (isMobile ? 81 : 78) };
 }
 
 // ====================================================================

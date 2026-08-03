@@ -289,8 +289,8 @@ const SEAT_POSITIONS = [
 Bet chips sit on the felt in front of each seat, nudged toward the center via `BET_CHIP_POSITIONS`. The pot is at `{ top: 50, left: 50 }`.
 
 **Your hole cards render on the felt too** — absolutely positioned at `getHeroCardPos(seat, isMobile)`, on the line between your seat and the pot so they read like your hand in front of you, and carefully placed to clear the felt's other elements:
-- center seats (0/3): straight toward the middle, pushed **55%** of the way — above the bet chip (which stops at 30%) and below the pot pill;
-- side seats (1/2/4/5): at table-center height (50%), offset to the **inside** of the seat (22% / 78% desktop, 19% / 81% on phones) — clear of the seat column on one side and the community cards on the other.
+- center seats (0/3): straight toward the middle, pushed **48%** of the way (was 55% — the cards floated too high up the felt) — just above the bet chip (which stops at 28%) and below the pot pill;
+- side seats (1/2/4/5): **70% of the way toward the middle** — pulled back from the old flat 50% (table center) so the cards hug their seat instead of stranding mid-felt — offset to the **inside** of the seat (22% / 78% desktop, 19% / 81% on phones), clear of the seat column on one side and the bet chip below on the other.
 
 Cards get a slight fan (rotate ±5°) and scale to 110% while it's your turn. On **landscape phones** they fall back to the compact bottom bar (`useIsLandscapePhone()`), because the flat 2:1 felt has no room.
 
