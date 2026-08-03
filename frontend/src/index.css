@@ -488,10 +488,22 @@ html {
 
 /* ================================================================
    PORTRAIT PHONES — make the whole game fit without scrolling
-   Table uses a flatter 2:1 oval, community cards are 'md' sized, and
-   the controls are compacted so header + table + controls all fit in
-   the viewport height.
+   The racetrack table stands VERTICAL (height-driven 3:4 stadium,
+   straight sides left/right, rounded caps top/bottom) so it fills the
+   tall phone screen. Community cards are 'md' sized and the controls
+   are compacted so header + table + controls all fit the viewport.
    ================================================================ */
+@media (orientation: portrait) and (max-width: 639px) {
+  /* Size the felt by HEIGHT and derive width from the 3:4 ratio, so the
+     vertical racetrack fills the row without overflowing it. */
+  .felt-wrap {
+    width: auto !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    aspect-ratio: 3 / 4 !important;
+  }
+}
+
 @media (max-width: 640px) {
   /* Compact action buttons so the row fits beside the bet controls */
   .landscape-controls .action-btn-fold,

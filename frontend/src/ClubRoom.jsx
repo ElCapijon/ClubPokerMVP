@@ -6,16 +6,17 @@ const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'h
 
 const MAX_SEATS = 6;
 
-// Seat positions for the racetrack (stadium) table layout, clockwise from
-// bottom-center. The table is a stadium shape: straight sides with
-// semicircular ends. Each seat hugs the rail.
+// Seat positions for the racetrack (stadium) table, clockwise from
+// bottom-center. The stadium hugs the rail in any orientation: horizontal
+// on desktop/landscape (rounded ends left/right), vertical in portrait
+// (rounded ends top/bottom) — the same six spots always sit on the rail.
 const SEAT_POSITIONS = [
-  { top: 91, left: 50 },  // Seat 0: Hero — bottom center, on the straight edge
-  { top: 68, left: 10 },  // Seat 1: Lower-left, on the left end cap
-  { top: 32, left: 10 },  // Seat 2: Upper-left, on the left end cap
-  { top: 8,  left: 50 },  // Seat 3: Top center, on the straight edge
-  { top: 32, left: 90 },  // Seat 4: Upper-right, on the right end cap
-  { top: 68, left: 90 },  // Seat 5: Lower-right, on the right end cap
+  { top: 91, left: 50 },  // Seat 0: Hero — bottom center
+  { top: 68, left: 10 },  // Seat 1: Lower-left
+  { top: 32, left: 10 },  // Seat 2: Upper-left
+  { top: 8,  left: 50 },  // Seat 3: Top center
+  { top: 32, left: 90 },  // Seat 4: Upper-right
+  { top: 68, left: 90 },  // Seat 5: Lower-right
 ];
 
 // Bet chips are rendered on the felt directly in front of each seat, pushed
