@@ -161,16 +161,6 @@ function useIsLandscapePhone() {
   return isLandscape;
 }
 
-// Where YOUR hole cards sit while you are seated: centered on your seat and
-// rendered BEHIND the avatar (the seat column carries the higher z-index), so
-// the profile image sits in front of the pair and the cards peek out around
-// it — the classic "cards in front of you" poker look. The dealer button on
-// your seat is nudged up slightly (-mt on the D chip) so the cards' top edge
-// clears it. On landscape phones they fall back to the compact bottom bar.
-function getHeroCardPos(index) {
-  return SEAT_POSITIONS[index] || { top: 50, left: 50 };
-}
-
 // ====================================================================
 // MAIN COMPONENT
 // ====================================================================
@@ -1020,7 +1010,6 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
               const isActiveTurn = index === currentPlayerSeatIndex;
               const isDealer = index === dealerSeatIndex;
               const chipPos = BET_CHIP_POSITIONS[index];
-              const heroCardPos = isMe ? getHeroCardPos(index) : null;
               // Readable, adaptive bet chip: abbreviate large amounts (e.g. $1.2K,
               // $2.5M) and only scale the font down slightly, so big bets stay
               // crisp and legible instead of being clipped inside a fixed circle.
@@ -1063,26 +1052,65 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                     ${player.isFolded ? 'opacity-40 grayscale' : ''}
                     transition-all duration-300
                   `}>
-                    {/* Dealer Button */}
-                    {isDealer && (
-                      /* On YOUR seat the D chip is nudged up slightly so the
-                         hole cards peeking from behind the avatar clear it. */
-                      <div className={`w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-white text-black flex items-center justify-center
-                                      text-[9px] sm:text-[11px] font-bold shadow-lg z-10 animate-bounce-subtle
-                                      ${isMe ? '-mt-1.5 sm:-mt-2' : ''}`}>
+                    {/* Dealer Button — on OTHER seats it stays above the avatar.
+                        On YOUR seat it floats BESIDE the avatar instead (see the
+                        ring below), so it can never sit on top of the hole cards
+                        that peek up from behind the profile image. */}
+                    {isDealer && !isMe && (
+                      <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-white text-black flex items-center justify-center
+                                      text-[9px] sm:text-[11px] font-bold shadow-lg z-10 animate-bounce-subtle">
                         D
                       </div>
                     )}
 
-                    {/* Avatar ring — pulsing green if active turn (bright so it
-                        clearly reads at a glance; the isMe gold ring only shows
-                        when it is NOT your turn, so it never dims the turn glow) */}
+                    {/* Avatar ring — relative so YOUR hole cards (and the
+                        dealer button) can anchor to it. Pulsing green if
+                        active turn (bright so it clearly reads at a glance);
+                        the isMe gold ring only shows when it is NOT your turn,
+                        so it never dims the turn glow. */}
                     <div className={`
-                      rounded-full p-1 transition-all duration-300
+                      relative z-10 rounded-full p-1 transition-all duration-300
                       ${isActiveTurn
                         ? 'bg-green-400/90 animate-pulse-turn shadow-lg shadow-green-400/60'
                         : isMe ? 'bg-poker-gold/30' : 'bg-transparent'}
                     `}>
+
+                      {/* YOUR hole cards — anchored to the avatar ring and
+                          rendered BEHIND it (z-0 inside the z-10 ring) so the
+                          profile image covers the middle of the pair. Nudged
+                          up 12px so the RANK CORNERS peek clearly above the
+                          avatar instead of hanging below it. On landscape
+                          phones they fall back to the compact bottom bar. */}
+                      {isMe && !isLandscapePhone && myPlayerData && gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
+                        <div className="absolute -translate-x-1/2 -translate-y-1/2 z-0 hero-seat-cards pointer-events-none"
+                          style={{ top: 'calc(50% - 12px)', left: '50%' }}
+                        >
+                          <div className={`flex items-end gap-0.5 sm:gap-1 transition-transform duration-300 ${isActiveTurn ? 'scale-110' : ''}`}
+                            style={{ filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.5))' }}
+                          >
+                            {holeCards.map((card, i) => (
+                              <div key={i} style={{ transform: `rotate(${i === 0 ? -5 : 5}deg)`, zIndex: i }}>
+                                <Card card={card} faceDown={false} size={isMobile ? 'md' : 'lg'} dealDelay={i} />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Dealer button on YOUR seat — floats BESIDE the avatar
+                          (inside-facing on side seats) at the avatar's vertical
+                          center, so it clears the hole cards peeking up from
+                          behind the profile image. */}
+                      {isDealer && isMe && (
+                        <div className={`absolute top-1/2 -translate-y-1/2 z-20
+                                        w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-white text-black
+                                        flex items-center justify-center text-[9px] sm:text-[11px]
+                                        font-bold shadow-lg animate-bounce-subtle
+                                        ${index === 1 || index === 2 ? '-right-10 sm:-right-14' : '-left-10 sm:-left-14'}`}>
+                          D
+                        </div>
+                      )}
+
                       <div className={`
                         w-9 h-9 sm:w-11 sm:h-11 rounded-full relative overflow-hidden
                         ${isMe
@@ -1159,28 +1187,6 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                   </div>
                 </div>
 
-                {/* YOUR hole cards — rendered on the felt at your seat
-                    (between the seat and the pot) so the bottom action bar
-                    stays small. Fan + gold glow so your hand reads clearly
-                    against the felt; on landscape phones they fall back to
-                    the compact bottom bar (no room on the flat 2:1 felt). */}
-                {isMe && !isLandscapePhone && myPlayerData && gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
-                  // z-[5]: BELOW the seat column (z-10) so the avatar paints
-                  // over the pair — the cards peek out around the profile image.
-                  <div className="absolute -translate-x-1/2 -translate-y-1/2 z-[5] hero-seat-cards pointer-events-none"
-                    style={{ top: `${heroCardPos.top}%`, left: `${heroCardPos.left}%` }}
-                  >
-                    <div className={`flex items-end gap-0.5 sm:gap-1 transition-transform duration-300 ${isActiveTurn ? 'scale-110' : ''}`}
-                      style={{ filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.5))' }}
-                    >
-                      {holeCards.map((card, i) => (
-                        <div key={i} style={{ transform: `rotate(${i === 0 ? -5 : 5}deg)`, zIndex: i }}>
-                          <Card card={card} faceDown={false} size={isMobile ? 'md' : 'lg'} dealDelay={i} />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </React.Fragment>
             );
             })}              {/* ── Flying bet chips (seat → pot / winner) ── */}
