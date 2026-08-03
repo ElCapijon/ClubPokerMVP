@@ -17,7 +17,7 @@ const { sendWelcomeEmail, sendPasswordResetEmail } = require('./email');
 // entirely (the add_bots/remove_bots handlers refuse and the host buttons are
 // hidden). To REMOVE bots for good: delete backend/BotPlayer.js, the flag, and
 // every `// ── BOTS ──` section below + the bot UI in ClubRoom.jsx.
-const BOTS_ENABLED = true;
+const BOTS_ENABLED = false;
 const BotPlayer = require('./BotPlayer');
 // ────────────────────────────────────────────────────────────
 // Map rank number to stat name for hand rank tracking
