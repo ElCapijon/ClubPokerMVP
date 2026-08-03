@@ -1078,12 +1078,13 @@ export default function ClubRoom({ clubData, displayName, onLeave }) {
                       {/* YOUR hole cards — anchored to the avatar ring and
                           rendered BEHIND it (z-0 inside the z-10 ring) so the
                           profile image covers the middle of the pair. Nudged
-                          up 12px so the RANK CORNERS peek clearly above the
-                          avatar instead of hanging below it. On landscape
-                          phones they fall back to the compact bottom bar. */}
+                          up 16px so the RANK CORNERS peek clearly above the
+                          avatar (a touch toward the table center) instead of
+                          hanging below it. On landscape phones they fall back
+                          to the compact bottom bar. */}
                       {isMe && !isLandscapePhone && myPlayerData && gameState !== 'WAITING' && holeCards && holeCards.length > 0 && (
                         <div className="absolute -translate-x-1/2 -translate-y-1/2 z-0 hero-seat-cards pointer-events-none"
-                          style={{ top: 'calc(50% - 12px)', left: '50%' }}
+                          style={{ top: 'calc(50% - 16px)', left: '50%' }}
                         >
                           <div className={`flex items-end gap-0.5 sm:gap-1 transition-transform duration-300 ${isActiveTurn ? 'scale-110' : ''}`}
                             style={{ filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.5))' }}
