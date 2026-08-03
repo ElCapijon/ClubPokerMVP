@@ -21,7 +21,7 @@ const SEAT_POSITIONS = [
 // toward the table center (50,50) so they read like a real bet on the table.
 // Center seats (0 & 3) are pushed further so the chip clears the tall seat
 // column (dealer button + avatar + name); side seats only need a small nudge.
-const BET_CHIP_FRACTIONS = [0.28, 0.20, 0.20, 0.28, 0.20, 0.20];
+const BET_CHIP_FRACTIONS = [0.30, 0.20, 0.20, 0.30, 0.20, 0.20];
 const BET_CHIP_POSITIONS = SEAT_POSITIONS.map((pos, i) => ({
   top: pos.top + (50 - pos.top) * BET_CHIP_FRACTIONS[i],
   left: pos.left + (50 - pos.left) * BET_CHIP_FRACTIONS[i],
@@ -161,24 +161,36 @@ function useIsLandscapePhone() {
   return isLandscape;
 }
 
-// Where YOUR hole cards sit on the felt while you are seated. They render on
-// the line between your seat and the pot so they read like your hand sitting
-// in front of you, and they clear everything already on the felt:
-//   - center seats (0/3): straight up/down toward the middle, pushed 48% of
-//     the way (was 55% — the cards floated too high up the felt). They now
-//     sit just above the bet chip (which stops at 28%) and below the pot pill
-//   - side seats (1/2/4/5): 70% of the way toward the middle (was a flat 50%
-//     = all the way to table center, which stranded them mid-felt). They now
-//     hug their seat and stay clear of the side bet chip (which stops at 20%)
+// Where YOUR hole cards sit on the felt while you are seated. Each seat's
+// cards hug the RAIL next to the seat column — NOT floating up toward the pot
+// (that read as "too high up the table"). The pair is tucked to the inside of
+// the seat so it always clears the avatar/dealer column, the bet chip, the
+// community cards and the pot pill:
+//   - center seats (0/3): beside the avatar at the rail (bottom → right,
+//     top → left)
+//   - side seats (1/2/4/5): below the lower seats (1/5), above the upper
+//     seats (2/4), nudged toward the table inside of the seat column
+const HERO_CARD_POSITIONS = [
+  { top: 84, left: 61 },   // Seat 0: bottom-center → beside-right
+  { top: 84, left: 21 },   // Seat 1: lower-left → below, inside
+  { top: 16, left: 21 },   // Seat 2: upper-left → above, inside
+  { top: 16, left: 39 },   // Seat 3: top-center → beside-left
+  { top: 16, left: 79 },   // Seat 4: upper-right → above, inside
+  { top: 84, left: 79 },   // Seat 5: lower-right → below, inside
+];
+// Mobile portrait: the felt is a narrower 4/5 stadium, so the pair sits a bit
+// lower/outer (and the side seats tuck further in to stay off the rail).
+const HERO_CARD_POSITIONS_MOBILE = [
+  { top: 86, left: 63 },
+  { top: 86, left: 25 },
+  { top: 14, left: 25 },
+  { top: 14, left: 37 },
+  { top: 14, left: 75 },
+  { top: 86, left: 75 },
+];
+
 function getHeroCardPos(index, isMobile) {
-  const isCenter = index === 0 || index === 3;
-  if (isCenter) {
-    const pos = SEAT_POSITIONS[index];
-    return { top: pos.top + (50 - pos.top) * 0.48, left: 50 };
-  }
-  const isLeft = index === 1 || index === 2;
-  const pos = SEAT_POSITIONS[index];
-  return { top: pos.top + (50 - pos.top) * 0.70, left: isLeft ? (isMobile ? 19 : 22) : (isMobile ? 81 : 78) };
+  return (isMobile ? HERO_CARD_POSITIONS_MOBILE : HERO_CARD_POSITIONS)[index] || { top: 50, left: 50 };
 }
 
 // ====================================================================
