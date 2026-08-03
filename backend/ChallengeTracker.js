@@ -9,7 +9,7 @@
 const db = require('./db');
 
 // ─── In-Memory Cache ──────────────────────────────────────
-// Structure: Map<userId, Map<challengeId, { progress, dirty }>>
+// Structure: Map<userId, Map<challengeId, { progress, isCompleted, dirty }>>
 const progressCache = new Map();
 
 // Cached challenge definitions (loaded once at server start)
@@ -59,6 +59,29 @@ async function init(io, userSocketMap) {
     definitionsByStat = new Map();
   }
 
+  // Seed the in-memory cache with existing progress. The completion toast and
+  // the wasCompleted check in trackStat() read ONLY from this cache — without
+  // seeding, every server restart leaves the cache empty, so already-completed
+  // challenges re-complete and re-announce on the next matching stat.
+  try {
+    const progressResult = await db.query(
+      'SELECT user_id, challenge_id, progress, is_completed FROM user_challenge_progress'
+    );
+    for (const row of progressResult.rows) {
+      if (!progressCache.has(row.user_id)) {
+        progressCache.set(row.user_id, new Map());
+      }
+      progressCache.get(row.user_id).set(row.challenge_id, {
+        progress: row.progress,
+        isCompleted: row.is_completed,
+        dirty: false,
+      });
+    }
+    console.log(`[Challenges] Seeded cache with ${progressResult.rows.length} existing progress rows`);
+  } catch (err) {
+    console.error('[Challenges] Failed to seed progress cache:', err.message);
+  }
+
   // Flush dirty progress to DB every 15 seconds
   flushIntervalHandle = setInterval(() => flushAll(), 15000);
   console.log('[Challenges] Tracker initialized with 15s batch flush interval');
@@ -72,7 +95,7 @@ function shutdown() {
     clearInterval(flushIntervalHandle);
     flushIntervalHandle = null;
   }
-  flushAll();
+  return flushAll();
 }
 
 // ─── Core Stat Tracking ───────────────────────────────────
@@ -104,6 +127,12 @@ function trackStat(userId, statName, amount = 1) {
     const newProgress = Math.min(current + amount, def.target_value);
     const wasCompleted = current >= def.target_value;
     const nowCompleted = newProgress >= def.target_value;
+
+    // Already at target (completed) — nothing changed, so don't re-dirty the
+    // entry (which would re-flush it every hand) and don't re-announce it.
+    if (current === newProgress && wasCompleted === nowCompleted) {
+      continue;
+    }
 
     userMap.set(def.id, {
       progress: newProgress,
@@ -144,7 +173,7 @@ async function getUserProgress(userId) {
     [userId]
   );
 
-  return result.rows.map(row => ({
+  const rows = result.rows.map(row => ({
     id: row.id,
     stat: row.stat,
     name: row.name,
@@ -154,6 +183,24 @@ async function getUserProgress(userId) {
     isCompleted: row.is_completed || false,
     completedAt: row.completed_at,
   }));
+
+  // Keep the in-memory cache in sync with the DB. This is a second line of
+  // defense for the cold-start bug: progress loaded here must never be
+  // re-announced as completed by a later trackStat(). Never clobber an entry
+  // with pending (dirty, not-yet-flushed) changes.
+  if (userId && rows.length > 0) {
+    if (!progressCache.has(userId)) {
+      progressCache.set(userId, new Map());
+    }
+    const userMap = progressCache.get(userId);
+    for (const r of rows) {
+      const existing = userMap.get(r.id);
+      if (existing && existing.dirty) continue;
+      userMap.set(r.id, { progress: r.progress, isCompleted: r.isCompleted, dirty: false });
+    }
+  }
+
+  return rows;
 }
 
 // ─── Batch Database Flush ─────────────────────────────────
